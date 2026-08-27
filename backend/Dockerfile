@@ -14,11 +14,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY package.json package-lock.json* ./
 RUN npm install --omit=dev
 
+# Copy source before generating Prisma client
+COPY . .
+
 # Generate Prisma client
 RUN npx prisma generate
-
-# Copy source
-COPY . .
 
 # Create non-root user
 RUN groupadd -r appuser && useradd -r -g appuser -u 1001 appuser && \
