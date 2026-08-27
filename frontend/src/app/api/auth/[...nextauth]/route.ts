@@ -79,5 +79,5 @@ const authOptions = {
   secret: process.env.NEXTAUTH_SECRET || "dev-secret-change-in-production",
 };
 
-export const handler = NextAuth(authOptions);
-export { handler as GET, handler as POST };
+export const GET = NextAuth(authOptions) as any;
+export const POST = NextAuth(authOptions) as any;
