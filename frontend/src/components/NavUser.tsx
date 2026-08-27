@@ -1,6 +1,7 @@
 "use client";
 
 import { useSession } from "next-auth/react";
+import Link from "next/link";
 
 export default function NavUser() {
   const { data: session, status } = useSession();
