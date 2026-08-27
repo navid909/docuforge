@@ -1,5 +1,5 @@
 import type { Metadata } from "next";
-import CookieConsent from "@/components/CookieConsent";
+import CookieConsent from "../components/CookieConsent";
 
 export const metadata: Metadata = {
   title: "DocuForge — Free PDF & Document Tools",
