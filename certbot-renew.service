@@ -1,0 +1,27 @@
+# Systemd timer for Certbot auto-renewal
+# Place in /etc/systemd/system/certbot-renew.service
+
+[Unit]
+Description=DocuForge Certbot SSL Certificate Renewal
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+EnvironmentFile=/opt/docuforge/.env
+ExecStart=/usr/bin/docker compose -f /opt/docuforge/docker-compose.yml run --rm certbot renew --quiet --no-permanent-renewal
+ExecStartPost=/usr/bin/systemctl reload nginx-docuforge.service
+TimeoutStartSec=300
+
+# Security
+ProtectSystem=full
+ProtectHome=yes
+PrivateTmp=yes
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=certbot-renew
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,48 @@
+# Systemd service for docker-compose management
+# Place in /etc/systemd/system/docuforge.service
+
+[Unit]
+Description=DocuForge PDF Tools - Docker Compose Services
+Requires=docker.service
+After=docker.service network-online.target
+
+# Start order: network first, then docker, then our services
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+
+# Working directory with docker-compose.yml
+WorkingDirectory=/opt/docuforge
+
+# Environment file with secrets
+EnvironmentFile=/opt/docuforge/.env
+
+# Docker Compose commands
+ExecStartPre=/usr/bin/docker compose pull
+ExecStart=/usr/bin/docker compose up -d --remove-orphans
+ExecStop=/usr/bin/docker compose down
+ExecReload=/usr/bin/docker compose up -d --remove-orphans
+
+# Restart policy
+Restart=on-failure
+RestartSec=10
+
+# Security hardening
+ProtectSystem=full
+ProtectHome=yes
+NoNewPrivileges=no
+PrivateTmp=yes
+
+# Resource limits
+LimitNOFILE=65536
+LimitNPROC=4096
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=docuforge
+
+[Install]
+WantedBy=multi-user.target

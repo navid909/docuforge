@@ -1,0 +1,14 @@
+# Systemd timer for Certbot SSL certificate auto-renewal
+# Place in /etc/systemd/system/certbot-renew.timer
+
+[Unit]
+Description=Daily Certbot SSL Certificate Renewal Timer
+Requires=certbot-renew.service
+
+[Timer]
+OnCalendar=daily
+RandomizedDelaySec=1h
+Persistent=true
+
+[Install]
+WantedBy=timers.target

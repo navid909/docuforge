@@ -1,0 +1,50 @@
+{
+  "name": "docuforge-backend",
+  "version": "2.0.0",
+  "description": "DocuForge PDF Tools - Fastify API with BullMQ and Prisma",
+  "main": "src/server.js",
+  "type": "module",
+  "scripts": {
+    "dev": "node --watch src/server.js",
+    "start": "node src/server.js",
+    "worker": "node src/worker.js",
+    "migrate": "prisma migrate deploy",
+    "studio": "prisma studio",
+    "generate": "prisma generate",
+    "cleanup": "node src/scripts/cleanup.js"
+  },
+  "dependencies": {
+    "fastify": "^4.26.2",
+    "@fastify/cors": "^9.0.0",
+    "@fastify/multipart": "^8.1.0",
+    "@fastify/static": "^7.0.4",
+    "@fastify/helmet": "^11.1.1",
+    "@fastify/rate-limit": "^9.1.0",
+    "@prisma/client": "^5.16.1",
+    "bullmq": "^5.10.0",
+    "ioredis": "^5.3.2",
+    "pdf-lib": "^1.17.1",
+    "pdf2pic": "^3.1.1",
+    "sharp": "^0.33.3",
+    "puppeteer": "^22.6.1",
+    "docx": "^8.5.0",
+    "exceljs": "^4.4.0",
+    "pptxgenjs": "^3.12.0",
+    "stripe": "^14.24.0",
+    "bcryptjs": "^2.4.3",
+    "jsonwebtoken": "^9.0.2",
+    "zod": "^3.23.8",
+    "pino": "^8.19.0",
+    "pino-pretty": "^10.3.1",
+    "dotenv": "^16.4.5",
+    "fs-extra": "^11.2.0",
+    "uuid": "^9.0.1",
+    "mime-types": "^2.1.7"
+  },
+  "devDependencies": {
+    "prisma": "^5.16.1"
+  },
+  "prisma": {
+    "seed": "node prisma/seed.js"
+  }
+}

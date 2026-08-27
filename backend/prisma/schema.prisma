@@ -1,0 +1,78 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id            String    @id @default(cuid())
+  email         String    @unique
+  passwordHash  String?
+  isPremium     Boolean   @default(false)
+  premiumUntil  DateTime?
+  dailyUsed     Int       @default(0)
+  dailyResetAt  DateTime  @default(now())
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  apiKeys       ApiKey[]
+  jobs          ConversionJob[]
+  subscriptions Subscription[]
+
+  @@map("users")
+}
+
+model ApiKey {
+  id        String   @id @default(cuid())
+  keyHash   String   @unique
+  keyPrefix String   @db.VarChar(12)
+  name      String?
+  lastUsed  DateTime?
+  createdAt DateTime @default(now())
+
+  userId    String
+  user      User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("api_keys")
+}
+
+model ConversionJob {
+  id          String    @id @default(cuid())
+  status      String    @default("pending")
+  tool        String
+  inputFile   String
+  outputFile  String?
+  outputFiles String?
+  error       String?
+  metadata    String?   @db.Text
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  completedAt DateTime?
+
+  userId String
+  user   User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, status])
+  @@index([createdAt])
+  @@map("conversion_jobs")
+}
+
+model Subscription {
+  id              String   @id @default(cuid())
+  stripeSessionId String   @unique @db.VarChar(255)
+  stripeCustomerId String? @db.VarChar(255)
+  status          String   @default("active")
+  plan            String   @default("premium")
+  currentPeriodEnd DateTime
+  createdAt       DateTime @default(now())
+
+  userId String
+  user   User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([stripeSessionId])
+  @@map("subscriptions")
+}

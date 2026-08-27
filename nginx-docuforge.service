@@ -1,0 +1,41 @@
+# Systemd service for Nginx reverse proxy
+# Place in /etc/systemd/system/nginx-docuforge.service
+
+[Unit]
+Description=DocuForge Nginx Reverse Proxy
+Requires=network-online.target
+After=network-online.target docker.service
+Wants=docker.service
+
+[Service]
+Type=forking
+PIDFile=/var/run/nginx.pid
+
+# Document root and config
+EnvironmentFile=/opt/docuforge/.env
+ExecStartPre=/usr/sbin/nginx -t -c /opt/docuforge/nginx/nginx.conf
+ExecStart=/usr/sbin/nginx -c /opt/docuforge/nginx/nginx.conf
+ExecReload=/usr/sbin/nginx -c /opt/docuforge/nginx/nginx.conf -s reload
+ExecStop=/usr/sbin/nginx -c /opt/docuforge/nginx/nginx.conf -s quit
+TimeoutStopSec=30
+
+# Security hardening
+User=nginx
+Group=nginx
+ProtectSystem=full
+ProtectHome=yes
+PrivateTmp=yes
+NoNewPrivileges=no
+ReadOnlyPaths=/etc/passwd /etc/group /etc/nsswitch.conf /etc/resolv.conf
+
+# Resource limits
+LimitNOFILE=65536
+LimitNPROC=4096
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=nginx-docuforge
+
+[Install]
+WantedBy=multi-user.target

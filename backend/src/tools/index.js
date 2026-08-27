@@ -1,0 +1,10 @@
+export { pdfToWord } from './pdfToWord.js';
+export { pdfToExcel } from './pdfToExcel.js';
+export { pdfToPpt } from './pdfToPpt.js';
+export { pdfToImages } from './pdfToImages.js';
+export { imageToPdf } from './imageToPdf.js';
+export { docxToPdf } from './docxToPdf.js';
+export { xlsxToPdf } from './xlsxToPdf.js';
+export { pptxToPdf } from './pptxToPdf.js';
+export { mergePdfs } from './mergePdfs.js';
+export { compressPdf } from './compressPdf.js';
