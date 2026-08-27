@@ -9,8 +9,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy package files first for layer caching
-COPY package.json package-lock.json ./
-RUN npm ci --omit=dev 2>/dev/null || npm install --omit=dev
+COPY package.json ./
+RUN npm install --omit=dev
 
 # Copy worker code
 COPY worker.js ./
