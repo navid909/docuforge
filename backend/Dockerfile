@@ -7,6 +7,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     tesseract-ocr \
     poppler-utils \
     imagemagick \
+    openssl \
     && rm -rf /var/lib/apt/lists/*
 
 # Install dependencies
