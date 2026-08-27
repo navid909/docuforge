@@ -1,21 +1,3 @@
-FROM node:20-slim AS builder
-
-WORKDIR /app
-
-# Install dependencies
-COPY package.json package-lock.json* ./
-RUN npm ci --omit=dev 2>/dev/null || npm install --omit=dev
-
-# Copy source
-COPY . .
-
-# Generate Prisma client
-RUN npx prisma generate
-
-# Build app
-RUN npm run build
-
-# Runtime image
 FROM node:20-slim
 
 WORKDIR /app
@@ -27,16 +9,19 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     imagemagick \
     && rm -rf /var/lib/apt/lists/*
 
+# Install dependencies
+COPY package.json package-lock.json* ./
+RUN npm install --omit=dev
+
+# Generate Prisma client
+RUN npx prisma generate
+
+# Copy source
+COPY . .
+
 # Create non-root user
-RUN groupadd -r appuser && useradd -r -g appuser -u 1001 appuser
-
-# Copy build artifacts
-COPY --from=builder --chown=appuser:appuser /app/node_modules ./node_modules
-COPY --from=builder --chown=appuser:appuser /app/package.json ./package.json
-COPY --from=builder --chown=appuser:appuser /app/src ./src
-COPY --from=builder --chown=appuser:appuser /app/prisma ./prisma
-COPY --from=builder --chown=appuser:appuser /app/.env.example ./.env.example
-
+RUN groupadd -r appuser && useradd -r -g appuser -u 1001 appuser && \
+    chown -R appuser:appuser /app
 USER appuser
 
 EXPOSE 3001
