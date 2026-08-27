@@ -1,0 +1,13 @@
+{
+  "name": "docuforge-worker",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "node worker.js"
+  },
+  "dependencies": {
+    "bullmq": "^4.15.0",
+    "ioredis": "^5.3.2"
+  }
+}
