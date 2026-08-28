@@ -1,4 +1,4 @@
-const { Queue } = require('bullmq');
+import { Queue } from 'bullmq';
 import Redis from 'ioredis';
 
 const redisHost = process.env.REDIS_HOST || 'localhost';
