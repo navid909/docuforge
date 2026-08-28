@@ -11,10 +11,11 @@ import fs from 'fs-extra';
 
 import { errorHandler } from './middleware/errorHandler.js';
 import { authHook, requirePremium } from './middleware/auth.js';
-import * as authRoutes from './routes/auth.js';
-import * as toolRoutes from './routes/tools.js';
-import * as webhookRoutes from './routes/webhook.js';
-import * as premiumRoutes from './routes/premium.js';
+import authRoutes from './routes/auth.js';
+import apiRoutes from './routes/api.js';
+import toolRoutes from './routes/tools.js';
+import webhookRoutes from './routes/webhook.js';
+import premiumRoutes from './routes/premium.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const TMP_DIR = path.join(__dirname, '..', '..', 'tmp');
@@ -43,7 +44,7 @@ async function buildApp() {
   await app.register(multipart, {
     fileThere: true,
     limits: {
-      fileSize: parseInt(process.env.MAX_FILE_SIZE || '10485760'), // 10 MB
+      fileSize: parseInt(process.env.MAX_FILE_SIZE || '10485760'),
     },
     throwFileSizeLimit: true,
   });
@@ -82,13 +83,12 @@ async function buildApp() {
     return { version: process.env.npm_package_version || '2.0.0' };
   });
 
-  app.register(authRoutes, { prefix: '/auth' });
-  app.register(apiRoutes, { prefix: '/api' });
-  app.register(toolRoutes, { prefix: '/tools', preHandler: [authHook] });
-  app.register(webhookRoutes, { prefix: '/webhook' });
-  app.register(premiumRoutes, { prefix: '/premium', preHandler: [authHook] });
+  await app.register(authRoutes, { prefix: '/auth' });
+  await app.register(apiRoutes, { prefix: '/api' });
+  await app.register(toolRoutes, { prefix: '/tools', preHandler: [authHook] });
+  await app.register(webhookRoutes, { prefix: '/webhook' });
+  await app.register(premiumRoutes, { prefix: '/premium', preHandler: [authHook] });
 
-  // Graceful shutdown
   const signals = ['SIGTERM', 'SIGINT'];
   signals.forEach(signal => {
     process.on(signal, async () => {
@@ -105,7 +105,7 @@ async function main() {
   await fs.ensureDir(TMP_DIR);
   const app = await buildApp();
 
-  const port = parseInt(process.env.PORT || process.env.PORT || '3001');
+  const port = parseInt(process.env.PORT || '3001');
   const host = process.env.HOST || '0.0.0.0';
 
   try {
