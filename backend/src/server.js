@@ -102,13 +102,25 @@ async function buildApp() {
 }
 
 async function main() {
-  await fs.ensureDir(TMP_DIR);
-  const app = await buildApp();
-
-  const port = parseInt(process.env.PORT || '3001');
-  const host = process.env.HOST || '0.0.0.0';
+  console.log('Starting DocuForge backend...');
+  console.log('NODE_ENV:', process.env.NODE_ENV);
+  console.log('PORT:', process.env.PORT);
+  console.log('DATABASE_URL:', process.env.DATABASE_URL ? 'set' : 'NOT SET');
+  console.log('REDIS_HOST:', process.env.REDIS_HOST || 'localhost');
 
   try {
+    await fs.ensureDir(TMP_DIR);
+    console.log('TMP directory ready:', TMP_DIR);
+  } catch (err) {
+    console.error('Failed to create TMP directory:', err);
+    process.exit(1);
+  }
+
+  try {
+    const app = await buildApp();
+    const port = parseInt(process.env.PORT || '3001');
+    const host = process.env.HOST || '0.0.0.0';
+
     await app.listen({ port, host });
     console.log(`🚀 Server listening on http://${host}:${port}`);
     console.log(`📁 TMP directory: ${TMP_DIR}`);
