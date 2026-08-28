@@ -4,7 +4,7 @@ import { useState, useEffect, createContext, useContext } from 'react';
 
 interface Account {
   email: string;
-  apiKey: string;
+  token: string;
   premium: boolean;
 }
 
@@ -42,19 +42,19 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     });
     if (loginRes.ok) {
       const data = await loginRes.json();
-      const account = { email: emailTrim, apiKey: data.api_key, premium: !!data.premium };
+      const account = { email: emailTrim, token: data.token, premium: !!data.premium };
       setAccount(account);
       localStorage.setItem('docuforge_account', JSON.stringify(account));
       return;
     }
-    const signupRes = await fetch(`${BACKEND}/auth/signup`, {
+    const signupRes = await fetch(`${BACKEND}/auth/register`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ email: emailTrim }),
     });
     const data = await signupRes.json();
     if (!signupRes.ok) throw new Error(data.error || 'Signup failed');
-    const account = { email: emailTrim, apiKey: data.api_key, premium: false };
+    const account = { email: emailTrim, token: data.token, premium: !!data.premium };
     setAccount(account);
     localStorage.setItem('docuforge_account', JSON.stringify(account));
   };
