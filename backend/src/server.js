@@ -83,6 +83,7 @@ async function buildApp() {
   });
 
   app.register(authRoutes, { prefix: '/auth' });
+  app.register(apiRoutes, { prefix: '/api' });
   app.register(toolRoutes, { prefix: '/tools', preHandler: [authHook] });
   app.register(webhookRoutes, { prefix: '/webhook' });
   app.register(premiumRoutes, { prefix: '/premium', preHandler: [authHook] });

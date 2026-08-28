@@ -1,5 +1,6 @@
 import { FastifyPluginAsyncTypebox } from '@fastify/typebox';
 import { Type } from '@fastify/typebox';
+import crypto from 'crypto';
 
 export const authRoutes = FastifyPluginAsyncTypebox({
   async fastify({ reply, log }) {
@@ -10,8 +11,6 @@ export const authRoutes = FastifyPluginAsyncTypebox({
       schema: {
         body: Type.Object({
           email: Type.String({ format: 'email' }),
-          password: Type.Optional(Type.String({ minLength: 8 })),
-          name: Type.Optional(Type.String()),
         }),
         response: {
           201: Type.Object({
@@ -22,27 +21,33 @@ export const authRoutes = FastifyPluginAsyncTypebox({
             }),
             apiKey: Type.String(),
           }),
-          400: Type.Object({
-            error: Type.String(),
-          }),
-          409: Type.Object({
-            error: Type.String(),
-          }),
+          400: Type.Object({ error: Type.String() }),
+          409: Type.Object({ error: Type.String() }),
         },
       },
       handler: async (request, reply) => {
-        const { email, password, name } = request.body;
+        const { email } = request.body;
 
         try {
-          const existing = await prisma.prisma.user.findUnique({
-            where: { email },
-          });
-
+          const existing = await prisma.user.findUnique({ where: { email } });
           if (existing) {
             return reply.code(409).send({ error: 'User with this email already exists' });
           }
 
-          const { user, apiKey } = await prisma.createUserWithApiKey(email, password, name);
+          const apiKey = 'd4g_' + crypto.randomBytes(32).toString('hex');
+          const keyHash = await prisma.hashApiKey(apiKey);
+          const keyPrefix = apiKey.slice(0, 12);
+
+          const user = await prisma.user.create({
+            data: {
+              email,
+              passwordHash: null,
+              apiKeys: {
+                create: { keyHash, keyPrefix, name: 'main' },
+              },
+            },
+            include: { apiKeys: true },
+          });
 
           return reply.code(201).send({
             success: true,
@@ -56,12 +61,11 @@ export const authRoutes = FastifyPluginAsyncTypebox({
       },
     });
 
-    // POST /auth/login (password-based)
+    // POST /auth/login - email only, no password
     fastify.post('/login', {
       schema: {
         body: Type.Object({
           email: Type.String({ format: 'email' }),
-          password: Type.String(),
         }),
         response: {
           200: Type.Object({
@@ -71,20 +75,17 @@ export const authRoutes = FastifyPluginAsyncTypebox({
               email: Type.String(),
             }),
             apiKey: Type.String(),
+            premium: Type.Boolean(),
           }),
-          401: Type.Object({
-            error: Type.String(),
-          }),
-          404: Type.Object({
-            error: Type.String(),
-          }),
+          401: Type.Object({ error: Type.String() }),
+          404: Type.Object({ error: Type.String() }),
         },
       },
       handler: async (request, reply) => {
-        const { email, password } = request.body;
+        const { email } = request.body;
 
         try {
-          const user = await prisma.prisma.user.findUnique({
+          const user = await prisma.user.findUnique({
             where: { email },
             include: { apiKeys: true },
           });
@@ -93,40 +94,24 @@ export const authRoutes = FastifyPluginAsyncTypebox({
             return reply.code(404).send({ error: 'User not found' });
           }
 
-          if (!user.passwordHash) {
-            return reply.code(401).send({ error: 'Password authentication not set up for this account' });
-          }
-
-          const isValid = await prisma.verifyPassword(password, user.passwordHash);
-          if (!isValid) {
-            return reply.code(401).send({ error: 'Invalid password' });
-          }
-
-          const apiKey = user.apiKeys[0]?.keyHash
-            ? await import('crypto').then(crypto =>
-                'd4g_' + crypto.randomBytes(32).toString('hex')
-              )
+          let apiKey = user.apiKeys[0]?.keyPrefix
+            ? await prisma.revealApiKey(user.apiKeys[0].keyPrefix, user.apiKeys[0].keyHash)
             : null;
 
-          if (apiKey) {
-            const keyHash = await import('../lib/prisma.js').then(m => m.hashApiKey(apiKey));
+          if (!apiKey) {
+            apiKey = 'd4g_' + crypto.randomBytes(32).toString('hex');
+            const keyHash = await prisma.hashApiKey(apiKey);
             const keyPrefix = apiKey.slice(0, 12);
-            await prisma.prisma.apiKey.create({
-              data: {
-                keyHash,
-                keyPrefix,
-                name: 'main',
-                userId: user.id,
-              },
+            await prisma.apiKey.create({
+              data: { keyHash, keyPrefix, name: 'main', userId: user.id },
             });
           }
-
-          const activeKey = user.apiKeys[0]?.keyHash || apiKey;
 
           return reply.send({
             success: true,
             user: { id: user.id, email: user.email },
-            apiKey: activeKey,
+            apiKey,
+            premium: user.isPremium || false,
           });
         } catch (error) {
           log.error(error);
@@ -135,7 +120,7 @@ export const authRoutes = FastifyPluginAsyncTypebox({
       },
     });
 
-    // POST /auth/api-key (exchange API key for session)
+    // POST /auth/api-key (validate API key)
     fastify.post('/api-key', {
       schema: {
         body: Type.Object({
@@ -152,9 +137,7 @@ export const authRoutes = FastifyPluginAsyncTypebox({
               dailyResetAt: Type.String(),
             }),
           }),
-          401: Type.Object({
-            error: Type.String(),
-          }),
+          401: Type.Object({ error: Type.String() }),
         },
       },
       handler: async (request, reply) => {
@@ -220,13 +203,27 @@ async function authHook(request, reply) {
   }
 
   const apiKey = authHeader.slice(7).trim();
-  const prisma = await import('../lib/prisma.js');
-  const result = await prisma.validateApiKey(apiKey);
-
-  if (!result.valid || !result.user) {
-    return reply.code(401).send({ error: 'Invalid API key' });
+  if (!apiKey) {
+    return reply.code(401).send({ error: 'Missing API key' });
   }
 
-  request.user = result.user;
-  request.apiKey = apiKey;
+  try {
+    const { validateApiKey, checkRateLimit } = await import('./prisma.js');
+    const result = await validateApiKey(apiKey);
+
+    if (!result.valid) {
+      return reply.code(401).send({ error: 'Invalid API key' });
+    }
+
+    const allowed = await checkRateLimit(result.user.id);
+    if (!allowed) {
+      return reply.code(429).send({ error: 'Daily free limit reached. Upgrade to premium.' });
+    }
+
+    request.user = result.user;
+    request.apiKey = apiKey;
+  } catch (err) {
+    request.log.error(err, 'Auth error');
+    return reply.code(500).send({ error: 'Authentication service unavailable' });
+  }
 }

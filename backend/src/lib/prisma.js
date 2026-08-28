@@ -1,6 +1,6 @@
-const { PrismaClient } = require('@prisma/client');
-const bcrypt = require('bcryptjs');
-const crypto = require('crypto');
+import { PrismaClient } from '@prisma/client';
+import bcrypt from 'bcryptjs';
+import crypto from 'crypto';
 
 export const prisma = new PrismaClient();
 
@@ -63,6 +63,15 @@ export async function validateApiKey(key) {
   });
 
   return { valid: true, user: apiKeyRecord.user };
+}
+
+export async function revealApiKey(keyPrefix, keyHash) {
+  const record = await prisma.apiKey.findFirst({
+    where: { keyPrefix, keyHash },
+    include: { user: true },
+  });
+  if (!record) return null;
+  return null; // Never reveal raw key after creation
 }
 
 export async function getUserById(userId) {
