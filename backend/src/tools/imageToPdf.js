@@ -1,46 +1,52 @@
 import fs from 'fs/promises';
 import path from 'path';
-import { createPdfFromImage } from 'pdf-lib'; // helper function
 import sharp from 'sharp';
+import { PDFDocument, rgb } from 'pdf-lib';
 
 export async function imageToPdf(inputPath, outputPath) {
   const image = sharp(inputPath);
-  const { width, height } = await image.metadata();
+  const meta = await image.metadata();
+  const format = meta.format;
 
-  // Create a one-page PDF from the image
-  const pdfBytes = await createPdfFromImage(inputPath);
+  let pdfBytes;
+  if (format === 'pdf') {
+    // Already a PDF, just copy
+    pdfBytes = await fs.readFile(inputPath);
+  } else {
+    // Convert image to PDF
+    const pdfDoc = await PDFDocument.create();
+    const imageBytes = await fs.readFile(inputPath);
+    let embeddedImage;
+
+    if (format === 'png') {
+      embeddedImage = await pdfDoc.embedPng(imageBytes);
+    } else if (format === 'jpeg' || format === 'jpg') {
+      embeddedImage = await pdfDoc.embedJpg(imageBytes);
+    } else {
+      // Convert to PNG first
+      const pngBuffer = await sharp(inputPath).png().toBuffer();
+      embeddedImage = await pdfDoc.embedPng(pngBuffer);
+    }
+
+    const page = pdfDoc.addPage([612, 792]);
+    const maxWidth = 612 - 2 * 72;
+    const maxHeight = 792 - 2 * 72;
+    const scale = Math.min(maxWidth / embeddedImage.width, maxHeight / embeddedImage.height, 1);
+    const imgWidth = embeddedImage.width * scale;
+    const imgHeight = embeddedImage.height * scale;
+    const x = (612 - imgWidth) / 2;
+    const y = (792 - imgHeight) / 2;
+
+    page.drawImage(embeddedImage, {
+      x,
+      y,
+      width: imgWidth,
+      height: imgHeight,
+    });
+
+    pdfBytes = await pdfDoc.save();
+  }
+
   await fs.writeFile(outputPath, pdfBytes);
-
   return outputPath;
-}
-
-async function createPdfFromImage(imagePath) {
-  // Use pdf-lib to create a simple one-page PDF
-  const { PDFDocument, rgb } = await import('pdf-lib');
-  const pdfDoc = await PDFDocument.create();
-
-  // For simplicity, create a blank page with text indicating image
-  // In production, use pdf2pic or similar to embed the image
-  const page = pdfDoc.addPage([612, 792]); // Letter size
-  const { width, height } = await sharp(imagePath).metadata();
-
-  // Scale image to fit within page margins
-  const margin = 72;
-  const maxWidth = 612 - 2 * margin;
-  const maxHeight = 792 - 2 * margin;
-  const scale = Math.min(maxWidth / width, maxHeight / height);
-  const imgWidth = width * scale;
-  const imgHeight = height * scale;
-
-  // Note: pdf-lib doesn't directly embed arbitrary images without
-  // converting to a base64-encoded data URI or using a specialized library
-  // For a real implementation, use pdf2pic or embed the image bytes
-
-  page.drawText(`Image: ${path.basename(imagePath)}`, {
-    x: margin,
-    y: 792 - margin,
-    size: 12,
-  });
-
-  return await pdfDoc.save();
 }
