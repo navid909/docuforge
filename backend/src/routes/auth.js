@@ -1,7 +1,7 @@
 import crypto from 'crypto';
 
 export default async function authRoutes(fastify, options) {
-  const prisma = await import('../lib/prisma.js');
+  const { prisma } = await import('../lib/prisma.js');
 
   fastify.post('/register', async (request, reply) => {
     const { email } = request.body || {};

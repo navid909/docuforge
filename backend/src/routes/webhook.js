@@ -2,7 +2,7 @@ import Stripe from 'stripe';
 
 export default async function webhookRoutes(fastify, options) {
   const stripeSecret = process.env.STRIPE_WEBHOOK_SECRET;
-  const prisma = await import('../lib/prisma.js');
+  const { prisma } = await import('../lib/prisma.js');
 
   fastify.post('/stripe', async (request, reply) => {
     if (!stripeSecret) {

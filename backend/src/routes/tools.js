@@ -68,7 +68,7 @@ function errorResponse(message, statusCode = 400) {
 }
 
 export default async function toolRoutes(fastify, options) {
-  const prisma = await import('../lib/prisma.js');
+  const { prisma } = await import('../lib/prisma.js');
 
   fastify.post('/pdf-to-word', async (request, reply) => {
     const { file } = request.body || {};

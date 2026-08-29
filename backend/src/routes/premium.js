@@ -1,7 +1,7 @@
 import Stripe from 'stripe';
 
 export default async function premiumRoutes(fastify, options) {
-  const prisma = await import('../lib/prisma.js');
+  const { prisma } = await import('../lib/prisma.js');
 
   fastify.post('/checkout', async (request, reply) => {
     const { plan, successUrl, cancelUrl } = request.body || {};
