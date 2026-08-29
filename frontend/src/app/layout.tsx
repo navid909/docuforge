@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import NextAuthProvider from "@/components/NextAuthProvider";
 import CookieConsent from "../components/CookieConsent";
 
 export const metadata: Metadata = {
