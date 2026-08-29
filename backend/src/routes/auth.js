@@ -34,8 +34,8 @@ export default async function authRoutes(fastify, options) {
         premium: false,
       });
     } catch (error) {
-      fastify.log.error(error);
-      return reply.code(400).send({ error: 'Failed to create user' });
+      fastify.log.error({ error: error.message, stack: error.stack, code: error.code }, 'Register failed');
+      return reply.code(400).send({ error: 'Failed to create user', details: error.message });
     }
   });
 
