@@ -60,7 +60,10 @@ export default async function authRoutes(fastify, options) {
         token = 'd4g_' + crypto.randomBytes(32).toString('hex');
         const keyHash = hashApiKey(token);
         const keyPrefix = token.slice(0, 12);
-        await prisma.apiKey.create({ data: { keyHash, keyPrefix, name: 'main', userId: user.id } });
+        await prisma.apiKey.update({
+          where: { id: user.apiKeys[0]?.id },
+          data: { keyHash, keyPrefix },
+        });
       }
 
       return reply.send({
