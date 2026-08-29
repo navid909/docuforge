@@ -1,7 +1,7 @@
 import crypto from 'crypto';
 
 export default async function authRoutes(fastify, options) {
-  const { prisma } = await import('../lib/prisma.js');
+  const { prisma, hashApiKey, revealApiKey } = await import('../lib/prisma.js');
 
   fastify.post('/register', async (request, reply) => {
     const { email } = request.body || {};
@@ -13,7 +13,7 @@ export default async function authRoutes(fastify, options) {
       }
 
       const token = 'd4g_' + crypto.randomBytes(32).toString('hex');
-      const keyHash = await prisma.hashApiKey(token);
+      const keyHash = hashApiKey(token);
       const keyPrefix = token.slice(0, 12);
 
       const user = await prisma.user.create({
@@ -53,12 +53,12 @@ export default async function authRoutes(fastify, options) {
       }
 
       let token = user.apiKeys[0]?.keyPrefix
-        ? await prisma.revealApiKey(user.apiKeys[0].keyPrefix, user.apiKeys[0].keyHash)
+        ? revealApiKey(user.apiKeys[0].keyPrefix, user.apiKeys[0].keyHash)
         : null;
 
       if (!token) {
         token = 'd4g_' + crypto.randomBytes(32).toString('hex');
-        const keyHash = await prisma.hashApiKey(token);
+        const keyHash = hashApiKey(token);
         const keyPrefix = token.slice(0, 12);
         await prisma.apiKey.create({ data: { keyHash, keyPrefix, name: 'main', userId: user.id } });
       }
