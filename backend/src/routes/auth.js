@@ -52,18 +52,17 @@ export default async function authRoutes(fastify, options) {
         return reply.code(404).send({ error: 'User not found' });
       }
 
-      let token = user.apiKeys[0]?.keyPrefix
-        ? revealApiKey(user.apiKeys[0].keyPrefix, user.apiKeys[0].keyHash)
-        : null;
+      const token = 'd4g_' + crypto.randomBytes(32).toString('hex');
+      const keyHash = hashApiKey(token);
+      const keyPrefix = token.slice(0, 12);
 
-      if (!token) {
-        token = 'd4g_' + crypto.randomBytes(32).toString('hex');
-        const keyHash = hashApiKey(token);
-        const keyPrefix = token.slice(0, 12);
+      if (user.apiKeys.length > 0) {
         await prisma.apiKey.update({
-          where: { id: user.apiKeys[0]?.id },
+          where: { id: user.apiKeys[0].id },
           data: { keyHash, keyPrefix },
         });
+      } else {
+        await prisma.apiKey.create({ data: { keyHash, keyPrefix, name: 'main', userId: user.id } });
       }
 
       return reply.send({
