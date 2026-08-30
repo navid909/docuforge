@@ -1,26 +1,28 @@
 import fs from 'fs/promises';
-import { PDFDocument } from 'pdf-lib';
-import { Document, Packer, Paragraph } from 'docx';
+import path from 'path';
+import pdf from 'pdf-parse';
+import { Document, Packer, Paragraph, TextRun } from 'docx';
 
 export async function pdfToWord(inputPath, outputPath) {
-  const pdfBuf = await fs.readFile(inputPath);
-  const pdfDoc = await PDFDocument.load(pdfBuf);
-  const pages = pdfDoc.getPages();
-
-  let fullText = '';
-  for (const page of pages) {
-    const textContent = page.node?.Text?.Chunks?.map(c => c.str)?.join(' ') || '';
-    if (textContent) {
-      fullText += textContent + '\n\n';
-    }
-  }
+  const dataBuffer = await fs.readFile(inputPath);
+  const data = await pdf(dataBuffer);
 
   const doc = new Document({
-    sections: [{
-      children: fullText.split('\n').filter(line => line.trim()).map(line =>
-        new Paragraph(line)
-      ),
-    }],
+    sections: [
+      {
+        properties: {},
+        children: [
+          new Paragraph({
+            children: [
+              new TextRun({
+                text: data.text || '',
+                size: 24,
+              }),
+            ],
+          }),
+        ],
+      },
+    ],
   });
 
   const buffer = await Packer.toBuffer(doc);
