@@ -3,6 +3,7 @@ import { Type } from '@fastify/typebox';
 import fs from 'fs/promises';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import crypto from 'crypto';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const BASE_DIR = path.resolve(__dirname, '..', '..');
@@ -39,64 +40,78 @@ export const apiRoutes = FastifyPluginAsyncTypebox({
         const pages = body.pages;
 
         const toolMap = {
-          'pdf-to-word': '/tools/pdf-to-word',
-          'pdf-to-excel': '/tools/pdf-to-excel',
-          'pdf-to-ppt': '/tools/pdf-to-ppt',
-          'pdf-to-images': '/tools/pdf-to-images',
-          'image-to-pdf': '/tools/image-to-pdf',
-          'docx-to-pdf': '/tools/docx-to-pdf',
-          'xlsx-to-pdf': '/tools/xlsx-to-pdf',
-          'pptx-to-pdf': '/tools/pptx-to-pdf',
-          'merge-pdfs': '/tools/merge-pdfs',
-          'split-pdf': '/tools/split-pdf',
-          'compress-pdf': '/tools/compress-pdf',
-          'ocr-image': '/tools/ocr-image',
+          'pdf-to-word': 'pdfToWord',
+          'pdf-to-excel': 'pdfToExcel',
+          'pdf-to-ppt': 'pdfToPpt',
+          'pdf-to-images': 'pdfToImages',
+          'image-to-pdf': 'imageToPdf',
+          'docx-to-pdf': 'docxToPdf',
+          'xlsx-to-pdf': 'xlsxToPdf',
+          'pptx-to-pdf': 'pptxToPdf',
+          'merge-pdfs': 'mergePdfs',
+          'split-pdf': 'splitPdf',
+          'compress-pdf': 'compressPdf',
+          'ocr-image': 'ocrImage',
         };
 
-        const target = toolMap[tool];
-        if (!target) {
+        const toolFn = toolMap[tool];
+        if (!toolFn) {
           return reply.code(400).send({ success: false, error: `Unsupported tool: ${tool}` });
         }
 
-        const FormData = (await import('form-data')).default;
-        const form = new FormData();
+        const needsFile = !['merge-pdfs'].includes(tool);
+        const hasFile = !needsFile || (tool === 'merge-pdfs' ? files && files.length : file);
 
-        const appendFastifyFile = (fastifyFile, fieldName) => {
-          if (!fastifyFile || !fastifyFile.filename) return;
-          form.append(fieldName, fastifyFile.file, {
-            filename: fastifyFile.filename,
-            contentType: fastifyFile.mimetype || 'application/octet-stream',
-          });
-        };
-
-        if (file) appendFastifyFile(file, 'file');
-        if (files && Array.isArray(files)) {
-          files.forEach((f) => appendFastifyFile(f, 'files'));
-        }
-        if (pages) form.append('pages', pages);
-
-        const internalUrl = `${reply.request.protocol || 'http'}://${reply.request.hostname}/tools${target}`;
-        const res = await fetch(internalUrl, {
-          method: 'POST',
-          headers: {
-            Authorization: request.headers.authorization || '',
-            ...(form.getHeaders ? form.getHeaders() : {}),
-          },
-          body: form,
-        });
-
-        const data = await res.json().catch(() => ({}));
-        if (!res.ok) {
-          return reply.status(res.status).send(data);
+        if (!hasFile) {
+          return reply.code(422).send({ success: false, error: 'Missing required file(s) for this tool.' });
         }
 
-        return {
-          jobId: data.jobId || data.download?.filename || `${Date.now()}`,
-          status: 'queued',
-          tool,
-          createdAt: new Date().toISOString(),
-          ...data,
-        };
+        const jobId = crypto.randomUUID();
+        const jobDir = path.join(TMP_DIR, jobId);
+        await fs.ensureDir(jobDir);
+
+        try {
+          const inputFiles = [];
+          const outputFile = path.join(jobDir, `output_${Date.now()}.bin`);
+
+          if (file) {
+            const inputPath = path.join(jobDir, file.filename);
+            await fs.writeFile(inputPath, await file.toBuffer());
+            inputFiles.push(inputPath);
+          }
+
+          if (files && Array.isArray(files)) {
+            for (const f of files) {
+              const inputPath = path.join(jobDir, f.filename);
+              await fs.writeFile(inputPath, await f.toBuffer());
+              inputFiles.push(inputPath);
+            }
+          }
+
+          const tools = await import('../tools/index.js');
+          const result = await tools[toolFn](
+            inputFiles.length === 1 ? inputFiles[0] : inputFiles,
+            outputFile
+          );
+
+          const outputPath = Array.isArray(result) ? result[0] : result;
+          const finalName = path.basename(outputPath);
+
+          return {
+            jobId,
+            status: 'completed',
+            tool,
+            createdAt: new Date().toISOString(),
+            download: {
+              filename: finalName,
+              url: `/download/${jobId}/${finalName}`,
+            },
+          };
+        } catch (error) {
+          log.error(error);
+          await fs.remove(jobDir).catch(() => {});
+          return reply.code(500).send({ success: false, error: 'Processing failed.' });
+        }
       },
     });
 
@@ -118,14 +133,16 @@ export const apiRoutes = FastifyPluginAsyncTypebox({
       },
       handler: async (request, reply) => {
         const jobId = request.params.jobId;
-        const candidate = path.join(TMP_DIR, jobId);
+        const jobDir = path.join(TMP_DIR, jobId);
         try {
-          await fs.access(candidate);
+          const entries = await fs.readdir(jobDir);
+          const output = entries.find((n) => n.startsWith('output_'));
+          if (!output) throw new Error('No output');
           return {
             jobId,
             status: 'completed',
             progress: 100,
-            downloadUrl: `/download/${jobId}`,
+            downloadUrl: `/download/${jobId}/${output}`,
             error: null,
             createdAt: new Date().toISOString(),
           };
@@ -142,7 +159,7 @@ export const apiRoutes = FastifyPluginAsyncTypebox({
       },
     });
 
-    fastify.get('/download/:jobId', {
+    fastify.get('/download/:jobId/*', {
       schema: {
         params: Type.Object({
           jobId: Type.String(),
@@ -150,7 +167,8 @@ export const apiRoutes = FastifyPluginAsyncTypebox({
       },
       handler: async (request, reply) => {
         const jobId = request.params.jobId;
-        const candidate = path.join(TMP_DIR, jobId);
+        const filename = request.params['*'];
+        const candidate = path.join(TMP_DIR, jobId, filename || '');
         try {
           const stat = await fs.stat(candidate);
           if (!stat.isFile()) throw new Error('Not a file');
@@ -159,7 +177,7 @@ export const apiRoutes = FastifyPluginAsyncTypebox({
         }
 
         reply.type('application/octet-stream');
-        reply.header('Content-Disposition', `attachment; filename="${jobId}"`);
+        reply.header('Content-Disposition', `attachment; filename="${filename || jobId}"`);
         const stream = await fs.createReadStream(candidate);
         return stream;
       },
