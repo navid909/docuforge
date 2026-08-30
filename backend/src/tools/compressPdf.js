@@ -3,15 +3,12 @@ import path from 'path';
 import { PDFDocument } from 'pdf-lib';
 
 export async function compressPdf(inputPath, outputPath) {
-  const pdfBytes = await fs.readFile(inputPath);
-  const pdfDoc = await PDFDocument.load(pdfBytes);
-
-  const pdfBytesCompressed = await pdfDoc.save({
+  const pdfBuffer = await fs.readFile(inputPath);
+  const pdfDoc = await PDFDocument.load(pdfBuffer);
+  const pdfBytes = await pdfDoc.save({
     useObjectStreams: false,
-    compress: true,
+    addDefaultPage: false,
   });
-
-  await fs.writeFile(outputPath, pdfBytesCompressed);
-
+  await fs.writeFile(outputPath, Buffer.from(pdfBytes));
   return outputPath;
 }

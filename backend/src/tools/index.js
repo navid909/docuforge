@@ -8,3 +8,4 @@ export { xlsxToPdf } from './xlsxToPdf.js';
 export { pptxToPdf } from './pptxToPdf.js';
 export { mergePdfs } from './mergePdfs.js';
 export { compressPdf } from './compressPdf.js';
+export { ocrImage } from './ocrImage.js';
