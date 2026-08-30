@@ -9,6 +9,15 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const BASE_DIR = path.resolve(__dirname, '..', '..');
 const TMP_DIR = path.join(BASE_DIR, 'tmp');
 
+async function getFileBuffer(file) {
+  if (!file || !file.file) return null;
+  const chunks = [];
+  for await (const chunk of file.file) {
+    chunks.push(chunk);
+  }
+  return Buffer.concat(chunks);
+}
+
 export const apiRoutes = FastifyPluginAsyncTypebox({
   async fastify({ reply, log }) {
     fastify.post('/convert', {
@@ -33,7 +42,7 @@ export const apiRoutes = FastifyPluginAsyncTypebox({
         },
       },
       handler: async (request, reply) => {
-        const body = request.body;
+        const body = request.body || {};
         const tool = body.tool;
         const file = body.file;
         const files = body.files;
@@ -60,7 +69,7 @@ export const apiRoutes = FastifyPluginAsyncTypebox({
         }
 
         const needsFile = !['merge-pdfs'].includes(tool);
-        const hasFile = !needsFile || (tool === 'merge-pdfs' ? files && files.length : file);
+        const hasFile = !needsFile || (tool === 'merge-pdfs' ? files && files.length : !!file);
 
         if (!hasFile) {
           return reply.code(422).send({ success: false, error: 'Missing required file(s) for this tool.' });
@@ -75,17 +84,27 @@ export const apiRoutes = FastifyPluginAsyncTypebox({
           const outputFile = path.join(jobDir, `output_${Date.now()}.bin`);
 
           if (file) {
-            const inputPath = path.join(jobDir, file.filename);
-            await fs.writeFile(inputPath, await file.toBuffer());
+            const buffer = getFileBuffer(file);
+            if (!buffer) throw new Error('Uploaded file is empty');
+            const ext = path.extname(file.filename || 'file') || '.bin';
+            const inputPath = path.join(jobDir, `input${ext}`);
+            await fs.writeFile(inputPath, buffer);
             inputFiles.push(inputPath);
           }
 
           if (files && Array.isArray(files)) {
             for (const f of files) {
-              const inputPath = path.join(jobDir, f.filename);
-              await fs.writeFile(inputPath, await f.toBuffer());
+              const buffer = getFileBuffer(f);
+              if (!buffer) continue;
+              const ext = path.extname(f.filename || 'file') || '.bin';
+              const inputPath = path.join(jobDir, `input_${inputFiles.length}${ext}`);
+              await fs.writeFile(inputPath, buffer);
               inputFiles.push(inputPath);
             }
+          }
+
+          if (tool === 'merge-pdfs' && !inputFiles.length) {
+            return reply.code(422).send({ success: false, error: 'Missing required files for merge-pdfs.' });
           }
 
           const tools = await import('../tools/index.js');
