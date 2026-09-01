@@ -56,7 +56,7 @@ function filesResponse(files) {
 function textResponse(text) {
   return {
     success: true,
-    text: text,
+    text,
   };
 }
 
@@ -137,6 +137,132 @@ export default async function toolRoutes(fastify, options) {
       return downloadResponse(outputPath, outputFilename);
     } catch (err) {
       fastify.log.error({ err, userId: user.id }, 'image-to-pdf failed');
+      await cleanupUpload(input.path);
+      return reply.code(500).send(errorResponse('Conversion failed. Please try again.'));
+    }
+  });
+
+  fastify.post('/merge-pdfs', async (request, reply) => {
+    const { files } = request.body || {};
+    const user = request.user;
+
+    if (!files || !files.length) {
+      return reply.code(422).send(errorResponse('Please upload at least 2 PDF files to merge.'));
+    }
+
+    const inputs = [];
+    try {
+      for (const file of files) {
+        const saved = await saveUpload(file);
+        inputs.push(saved.path);
+      }
+    } catch (err) {
+      for (const p of inputs) await cleanupUpload(p);
+      return reply.code(400).send(errorResponse('Failed to read uploaded files.'));
+    }
+
+    try {
+      const { checkRateLimit, incrementDailyUsage } = await prisma;
+      const allowed = await checkRateLimit(user.id);
+      if (!allowed) {
+        for (const p of inputs) await cleanupUpload(p);
+        return reply.code(429).send(errorResponse('Daily free limit reached. Upgrade to premium.'));
+      }
+
+      const outputFilename = `${crypto.randomUUID()}.pdf`;
+      const outputPath = path.join(TMP_DIR, outputFilename);
+
+      const { mergePdfs } = await import('../tools/mergePdfs.js');
+      await mergePdfs(inputs, outputPath);
+
+      await incrementDailyUsage(user.id);
+      await addConversionJob({
+        jobId: crypto.randomUUID(),
+        tool: 'merge-pdfs',
+        inputFile: inputs[0],
+        outputFile: outputPath,
+        userId: user.id,
+      });
+
+      for (const p of inputs) await cleanupUpload(p);
+      return downloadResponse(outputPath, outputFilename);
+    } catch (err) {
+      fastify.log.error({ err, userId: user.id }, 'merge-pdfs failed');
+      for (const p of inputs) await cleanupUpload(p);
+      return reply.code(500).send(errorResponse('Conversion failed. Please try again.'));
+    }
+  });
+
+  fastify.post('/compress-pdf', async (request, reply) => {
+    const { file } = request.body || {};
+    const user = request.user;
+    const input = await saveUpload(file);
+
+    try {
+      const { checkRateLimit, incrementDailyUsage } = await prisma;
+      const allowed = await checkRateLimit(user.id);
+      if (!allowed) {
+        return reply.code(429).send(errorResponse('Daily free limit reached. Upgrade to premium.'));
+      }
+
+      const outputFilename = `${crypto.randomUUID()}.pdf`;
+      const outputPath = path.join(TMP_DIR, outputFilename);
+
+      const { compressPdf } = await import('../tools/compressPdf.js');
+      await compressPdf(input.path, outputPath);
+
+      await incrementDailyUsage(user.id);
+      await addConversionJob({
+        jobId: crypto.randomUUID(),
+        tool: 'compress-pdf',
+        inputFile: input.path,
+        outputFile: outputPath,
+        userId: user.id,
+      });
+
+      await cleanupUpload(input.path);
+      return downloadResponse(outputPath, outputFilename);
+    } catch (err) {
+      fastify.log.error({ err, userId: user.id }, 'compress-pdf failed');
+      await cleanupUpload(input.path);
+      return reply.code(500).send(errorResponse('Conversion failed. Please try again.'));
+    }
+  });
+
+  fastify.post('/ocr-image', async (request, reply) => {
+    const { file } = request.body || {};
+    const user = request.user;
+    const input = await saveUpload(file);
+
+    try {
+      const { checkRateLimit, incrementDailyUsage } = await prisma;
+      const allowed = await checkRateLimit(user.id);
+      if (!allowed) {
+        return reply.code(429).send(errorResponse('Daily free limit reached. Upgrade to premium.'));
+      }
+
+      const outputFilename = `${crypto.randomUUID()}.txt`;
+      const outputPath = path.join(TMP_DIR, outputFilename);
+
+      const { ocrImage } = await import('../tools/ocrImage.js');
+      await ocrImage(input.path, outputPath);
+
+      await incrementDailyUsage(user.id);
+      await addConversionJob({
+        jobId: crypto.randomUUID(),
+        tool: 'ocr-image',
+        inputFile: input.path,
+        outputFile: outputPath,
+        userId: user.id,
+      });
+
+      await cleanupUpload(input.path);
+
+      const text = await fs.readFile(outputPath, 'utf-8');
+      await fs.unlink(outputPath);
+      return textResponse(text);
+    } catch (err) {
+      fastify.log.error({ err, userId: user.id }, 'ocr-image failed');
       await cleanupUpload(input.path);
       return reply.code(500).send(errorResponse('Conversion failed. Please try again.'));
     }
