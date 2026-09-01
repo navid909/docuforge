@@ -9,3 +9,6 @@ export { pptxToPdf } from './pptxToPdf.js';
 export { mergePdfs } from './mergePdfs.js';
 export { compressPdf } from './compressPdf.js';
 export { ocrImage } from './ocrImage.js';
+export { splitPdf } from './splitPdf.js';
+export { protectPdf } from './protectPdf.js';
+export { pdfToImage } from './pdfToImage.js';

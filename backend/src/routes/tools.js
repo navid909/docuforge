@@ -267,4 +267,112 @@ export default async function toolRoutes(fastify, options) {
       return reply.code(500).send(errorResponse('Conversion failed. Please try again.'));
     }
   });
+
+  fastify.post('/split-pdf', async (request, reply) => {
+    const { file, pageRange } = request.body || {};
+    const user = request.user;
+    const input = await saveUpload(file);
+
+    try {
+      const { checkRateLimit, incrementDailyUsage } = await prisma;
+      const allowed = await checkRateLimit(user.id);
+      if (!allowed) {
+        return reply.code(429).send(errorResponse('Daily free limit reached. Upgrade to premium.'));
+      }
+
+      const outputFilename = `${crypto.randomUUID()}.zip`;
+      const outputPath = path.join(TMP_DIR, outputFilename);
+
+      const { splitPdf } = await import('../tools/splitPdf.js');
+      await splitPdf(input.path, outputPath, pageRange);
+
+      await incrementDailyUsage(user.id);
+      await addConversionJob({
+        jobId: crypto.randomUUID(),
+        tool: 'split-pdf',
+        inputFile: input.path,
+        outputFile: outputPath,
+        userId: user.id,
+      });
+
+      await cleanupUpload(input.path);
+      return downloadResponse(outputPath, outputFilename);
+    } catch (err) {
+      fastify.log.error({ err, userId: user.id }, 'split-pdf failed');
+      await cleanupUpload(input.path);
+      return reply.code(500).send(errorResponse('Conversion failed. Please try again.'));
+    }
+  });
+
+  fastify.post('/protect-pdf', async (request, reply) => {
+    const { file, password, mode, watermarkText } = request.body || {};
+    const user = request.user;
+    const input = await saveUpload(file);
+
+    try {
+      const { checkRateLimit, incrementDailyUsage } = await prisma;
+      const allowed = await checkRateLimit(user.id);
+      if (!allowed) {
+        return reply.code(429).send(errorResponse('Daily free limit reached. Upgrade to premium.'));
+      }
+
+      const outputFilename = `${crypto.randomUUID()}.pdf`;
+      const outputPath = path.join(TMP_DIR, outputFilename);
+
+      const { protectPdf } = await import('../tools/protectPdf.js');
+      await protectPdf(input.path, outputPath, password, mode, watermarkText);
+
+      await incrementDailyUsage(user.id);
+      await addConversionJob({
+        jobId: crypto.randomUUID(),
+        tool: 'protect-pdf',
+        inputFile: input.path,
+        outputFile: outputPath,
+        userId: user.id,
+      });
+
+      await cleanupUpload(input.path);
+      return downloadResponse(outputPath, outputFilename);
+    } catch (err) {
+      fastify.log.error({ err, userId: user.id }, 'protect-pdf failed');
+      await cleanupUpload(input.path);
+      return reply.code(500).send(errorResponse('Conversion failed. Please try again.'));
+    }
+  });
+
+  fastify.post('/pdf-to-image', async (request, reply) => {
+    const { file, format, pages } = request.body || {};
+    const user = request.user;
+    const input = await saveUpload(file);
+
+    try {
+      const { checkRateLimit, incrementDailyUsage } = await prisma;
+      const allowed = await checkRateLimit(user.id);
+      if (!allowed) {
+        return reply.code(429).send(errorResponse('Daily free limit reached. Upgrade to premium.'));
+      }
+
+      const outputFilename = `${crypto.randomUUID()}.zip`;
+      const outputPath = path.join(TMP_DIR, outputFilename);
+
+      const { pdfToImage } = await import('../tools/pdfToImage.js');
+      await pdfToImage(input.path, outputPath, format, pages);
+
+      await incrementDailyUsage(user.id);
+      await addConversionJob({
+        jobId: crypto.randomUUID(),
+        tool: 'pdf-to-image',
+        inputFile: input.path,
+        outputFile: outputPath,
+        userId: user.id,
+      });
+
+      await cleanupUpload(input.path);
+      return downloadResponse(outputPath, outputFilename);
+    } catch (err) {
+      fastify.log.error({ err, userId: user.id }, 'pdf-to-image failed');
+      await cleanupUpload(input.path);
+      return reply.code(500).send(errorResponse('Conversion failed. Please try again.'));
+    }
+  });
 }
