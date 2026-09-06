@@ -52,7 +52,17 @@ export async function apiRoutes(fastify) {
   fastify.post('/convert', async (request, reply) => {
     try {
       const rawBody = request.body || {};
-      fastify.log.info({ bodyKeys: Object.keys(rawBody), bodyType: typeof rawBody, bodyConstructor: rawBody.constructor?.name, hasFilename: !!rawBody.filename, tool: rawBody.tool, fileKeys: rawBody.file ? Object.keys(rawBody.file) : null }, 'convert raw body');
+      fastify.log.info(
+        {
+          bodyKeys: Object.keys(rawBody),
+          bodyType: typeof rawBody,
+          bodyConstructor: rawBody.constructor?.name,
+          hasFilename: !!rawBody.filename,
+          tool: rawBody.tool,
+          fileKeys: rawBody.file ? Object.keys(rawBody.file) : null,
+        },
+        'convert raw body'
+      );
 
       let tool = rawBody.tool;
       let file = rawBody.file;
@@ -66,7 +76,9 @@ export async function apiRoutes(fastify) {
       const parsed = toolSchema.safeParse({ tool, file, files, pages });
       if (!parsed.success) {
         fastify.log.info({ issues: parsed.error.issues }, 'convert validation failed');
-        return reply.code(422).send({ success: false, error: parsed.error.issues.map((e) => e.message).join(', ') });
+        return reply
+          .code(422)
+          .send({ success: false, error: parsed.error.issues.map((e) => e.message).join(', ') });
       }
 
       const { tool: finalTool, file: finalFile, files: finalFiles, pages: finalPages } = parsed.data;
