@@ -55,30 +55,36 @@ export async function apiRoutes(fastify) {
       fastify.log.info(
         {
           bodyKeys: Object.keys(rawBody),
-          bodyType: typeof rawBody,
-          bodyConstructor: rawBody.constructor?.name,
-          hasFilename: !!rawBody.filename,
           tool: rawBody.tool,
           fileKeys: rawBody.file ? Object.keys(rawBody.file) : null,
         },
         'convert raw body'
       );
 
-      let tool = rawBody.tool;
-      let file = rawBody.file;
-      let files = rawBody.files;
-      let pages = rawBody.pages;
+      // Fastify multipart may expose fields differently depending on client/version
+      const extractTool = (body) => {
+        if (!body) return null;
+        if (typeof body.tool === 'string') return body.tool;
+        if (body.tool && typeof body.tool === 'object' && typeof body.tool.value === 'string') return body.tool.value;
+        if (typeof body.field === 'string') return body.field;
+        if (typeof body.name === 'string') return body.name;
+        return null;
+      };
 
-      if ((!tool || typeof tool !== 'string') && file && typeof file === 'object' && file.filename) {
-        tool = tool || rawBody.field || rawBody.name;
+      const tool = extractTool(rawBody);
+      const file = rawBody.file;
+      const files = rawBody.files;
+      const pages = rawBody.pages;
+
+      if (!tool) {
+        fastify.log.warn({ rawBody }, 'convert tool field missing');
+        return reply.code(422).send({ success: false, error: 'Missing tool field in multipart form.' });
       }
 
       const parsed = toolSchema.safeParse({ tool, file, files, pages });
       if (!parsed.success) {
         fastify.log.info({ issues: parsed.error.issues }, 'convert validation failed');
-        return reply
-          .code(422)
-          .send({ success: false, error: parsed.error.issues.map((e) => e.message).join(', ') });
+        return reply.code(422).send({ success: false, error: parsed.error.issues.map((e) => e.message).join(', ') });
       }
 
       const { tool: finalTool, file: finalFile, files: finalFiles, pages: finalPages } = parsed.data;

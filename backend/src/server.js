@@ -90,7 +90,7 @@ async function buildApp() {
   const signals = ['SIGTERM', 'SIGINT'];
   signals.forEach(signal => {
     process.on(signal, async () => {
-      request.log.info(`Received ${signal}, shutting down gracefully`);
+      fastify.log.info(`Received ${signal}, shutting down gracefully`);
       await app.close();
       process.exit(0);
     });
