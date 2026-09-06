@@ -48,36 +48,28 @@ async function getFileBuffer(file) {
   return Buffer.concat(chunks);
 }
 
-function normalizeBody(body) {
-  if (!body || typeof body !== 'object') return { tool: undefined, file: undefined, files: undefined, pages: undefined };
-
-  let tool = body.tool;
-  let file = body.file;
-  let files = body.files;
-  let pages = body.pages;
-
-  if (!tool || typeof tool !== 'string') {
-    const fastifyFile = file || body;
-    if (fastifyFile && typeof fastifyFile === 'object' && fastifyFile.filename) {
-      file = fastifyFile;
-    }
-  }
-
-  if (Array.isArray(body)) {
-    files = body;
-    file = undefined;
-  }
-
-  return { tool, file, files, pages };
-}
-
 export async function apiRoutes(fastify) {
   fastify.post('/convert', async (request, reply) => {
     try {
       const rawBody = request.body || {};
-      const normalized = normalizeBody(rawBody);
-      const parsed = toolSchema.parse(normalized);
-      const { tool, file, files, pages } = parsed;
+      fastify.log.info({ bodyKeys: Object.keys(rawBody), bodyType: typeof rawBody, bodyConstructor: rawBody.constructor?.name, hasFilename: !!rawBody.filename, tool: rawBody.tool, fileKeys: rawBody.file ? Object.keys(rawBody.file) : null }, 'convert raw body');
+
+      let tool = rawBody.tool;
+      let file = rawBody.file;
+      let files = rawBody.files;
+      let pages = rawBody.pages;
+
+      if ((!tool || typeof tool !== 'string') && file && typeof file === 'object' && file.filename) {
+        tool = tool || rawBody.field || rawBody.name;
+      }
+
+      const parsed = toolSchema.safeParse({ tool, file, files, pages });
+      if (!parsed.success) {
+        fastify.log.info({ issues: parsed.error.issues }, 'convert validation failed');
+        return reply.code(422).send({ success: false, error: parsed.error.issues.map((e) => e.message).join(', ') });
+      }
+
+      const { tool: finalTool, file: finalFile, files: finalFiles, pages: finalPages } = parsed.data;
 
       const toolMap = {
         'pdf-to-word': 'pdfToWord',
@@ -96,13 +88,13 @@ export async function apiRoutes(fastify) {
         'pdf-to-image': 'pdfToImage',
       };
 
-      const toolFn = toolMap[tool];
+      const toolFn = toolMap[finalTool];
       if (!toolFn) {
-        return reply.code(400).send({ success: false, error: `Unsupported tool: ${tool}` });
+        return reply.code(400).send({ success: false, error: `Unsupported tool: ${finalTool}` });
       }
 
-      const needsFile = !['merge-pdfs'].includes(tool);
-      const hasFile = !needsFile || (tool === 'merge-pdfs' ? files && files.length : !!file);
+      const needsFile = !['merge-pdfs'].includes(finalTool);
+      const hasFile = !needsFile || (finalTool === 'merge-pdfs' ? finalFiles && finalFiles.length : !!finalFile);
 
       if (!hasFile) {
         return reply.code(422).send({ success: false, error: 'Missing required file(s) for this tool.' });
@@ -116,17 +108,17 @@ export async function apiRoutes(fastify) {
         const inputFiles = [];
         const outputFile = path.join(jobDir, `output_${Date.now()}.bin`);
 
-        if (file) {
-          const buffer = getFileBuffer(file);
+        if (finalFile) {
+          const buffer = getFileBuffer(finalFile);
           if (!buffer) throw new Error('Uploaded file is empty');
-          const ext = path.extname(file.filename || 'file') || '.bin';
+          const ext = path.extname(finalFile.filename || 'file') || '.bin';
           const inputPath = path.join(jobDir, `input${ext}`);
           await fs.writeFile(inputPath, buffer);
           inputFiles.push(inputPath);
         }
 
-        if (files && Array.isArray(files)) {
-          for (const f of files) {
+        if (finalFiles && Array.isArray(finalFiles)) {
+          for (const f of finalFiles) {
             const buffer = getFileBuffer(f);
             if (!buffer) continue;
             const ext = path.extname(f.filename || 'file') || '.bin';
@@ -136,7 +128,7 @@ export async function apiRoutes(fastify) {
           }
         }
 
-        if (tool === 'merge-pdfs' && !inputFiles.length) {
+        if (finalTool === 'merge-pdfs' && !inputFiles.length) {
           return reply.code(422).send({ success: false, error: 'Missing required files for merge-pdfs.' });
         }
 
@@ -152,7 +144,7 @@ export async function apiRoutes(fastify) {
         const response = {
           jobId,
           status: 'completed',
-          tool,
+          tool: finalTool,
           createdAt: new Date().toISOString(),
           download: {
             filename: finalName,
