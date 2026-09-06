@@ -41,7 +41,6 @@ async function buildApp() {
   });
 
   await app.register(multipart, {
-    fileThere: true,
     limits: {
       fileSize: parseInt(process.env.MAX_FILE_SIZE || '10485760'),
     },
