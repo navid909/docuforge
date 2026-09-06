@@ -11,7 +11,7 @@ import fs from 'fs-extra';
 import { errorHandler } from './middleware/errorHandler.js';
 import { authHook, requirePremium } from './middleware/auth.js';
 import authRoutes from './routes/auth.js';
-import apiRoutes from './routes/api.js';
+import { apiRoutes } from './routes/api.js';
 import toolRoutes from './routes/tools.js';
 import webhookRoutes from './routes/webhook.js';
 import premiumRoutes from './routes/premium.js';
