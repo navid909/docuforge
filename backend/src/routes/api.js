@@ -48,11 +48,36 @@ async function getFileBuffer(file) {
   return Buffer.concat(chunks);
 }
 
+function normalizeBody(body) {
+  if (!body || typeof body !== 'object') return { tool: undefined, file: undefined, files: undefined, pages: undefined };
+
+  let tool = body.tool;
+  let file = body.file;
+  let files = body.files;
+  let pages = body.pages;
+
+  if (!tool || typeof tool !== 'string') {
+    const fastifyFile = file || body;
+    if (fastifyFile && typeof fastifyFile === 'object' && fastifyFile.filename) {
+      file = fastifyFile;
+    }
+  }
+
+  if (Array.isArray(body)) {
+    files = body;
+    file = undefined;
+  }
+
+  return { tool, file, files, pages };
+}
+
 export async function apiRoutes(fastify) {
   fastify.post('/convert', async (request, reply) => {
     try {
-      const body = toolSchema.parse(request.body || {});
-      const { tool, file, files, pages } = body;
+      const rawBody = request.body || {};
+      const normalized = normalizeBody(rawBody);
+      const parsed = toolSchema.parse(normalized);
+      const { tool, file, files, pages } = parsed;
 
       const toolMap = {
         'pdf-to-word': 'pdfToWord',
