@@ -37,6 +37,7 @@ export default function ToolForm({ tool }: ToolFormProps) {
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
   const [pages, setPages] = useState('');
+  const [uploading, setUploading] = useState(false);
 
   const BACKEND = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:8000';
   const canSubmit = !!account && !authLoading;
@@ -50,7 +51,8 @@ export default function ToolForm({ tool }: ToolFormProps) {
       setError('Select a file to process.');
       return;
     }
-    setStatus('Queuing job…');
+    setUploading(true);
+    setStatus('Processing…');
     setError('');
     setResult(null);
     setJobId(null);
@@ -73,13 +75,17 @@ export default function ToolForm({ tool }: ToolFormProps) {
         headers,
         body: fd,
       });
+
+      const data = await res.json().catch(() => ({}));
+
       if (!res.ok) {
-        const text = await res.text();
-        setError(text || 'Job submission failed.');
+        const message = data?.error || `Job submission failed with status ${res.status}.`;
+        setError(message);
         setStatus('');
+        setUploading(false);
         return;
       }
-      const data = await res.json();
+
       const newJobId = data.jobId || data.id;
       if (newJobId) {
         setJobId(newJobId);
@@ -95,14 +101,18 @@ export default function ToolForm({ tool }: ToolFormProps) {
           },
         });
         setStatus('Done');
+        setUploading(false);
       } else {
         setError('Unexpected response from server.');
+        setStatus('');
+        setUploading(false);
       }
     } catch (err: any) {
       setError(err.message || 'Network error.');
       setStatus('');
+      setUploading(false);
     }
-  }, [canSubmit, selectedFile, selectedFiles, pages, tool, account]);
+  }, [canSubmit, selectedFile, selectedFiles, pages, tool, account, BACKEND]);
 
   useEffect(() => {
     if (!polling || !jobId) return;
@@ -121,12 +131,14 @@ export default function ToolForm({ tool }: ToolFormProps) {
             setStatus('Done');
             setPolling(false);
             setProgress(100);
+            setUploading(false);
             return;
           }
           if (data.status === 'failed') {
             setError(data.error || 'Processing failed.');
             setStatus('');
             setPolling(false);
+            setUploading(false);
             return;
           }
           setProgress(Math.min(95, (data as any).progress ?? 0));
@@ -135,13 +147,14 @@ export default function ToolForm({ tool }: ToolFormProps) {
         } catch {
           setError('Status check failed — refresh to retry.');
           setPolling(false);
+          setUploading(false);
           return;
         }
       }
     }
     poll();
     return () => { cancelled = true; };
-  }, [polling, jobId, account]);
+  }, [polling, jobId, account, BACKEND]);
 
   const renderResult = () => {
     if (!result) return null;
@@ -162,7 +175,7 @@ export default function ToolForm({ tool }: ToolFormProps) {
       return (
         <div className="mt-4 space-y-3">
           <p className="text-sm text-slate-600">Downloaded files:</p>
-          <div>
+          <div className="flex flex-wrap gap-2">
             {(result.result.files as string[]).map((f) => (
               <a key={f} href={`${BACKEND}/download/${f}`} className="inline-flex items-center gap-2 rounded-lg border bg-white px-3 py-2 text-sm font-medium text-indigo-700 transition hover:bg-slate-50 hover:text-indigo-800">
                 Download {f}
@@ -205,8 +218,21 @@ export default function ToolForm({ tool }: ToolFormProps) {
             <input type="text" value={pages} onChange={(e) => setPages(e.target.value)} placeholder="Page numbers, e.g. 1,2,3" className="mt-3 w-full rounded-lg border bg-white px-3 py-2 text-sm" />
           )}
         </div>
-        <button type="button" onClick={submitJob} disabled={!canSubmit || !!error || (!!status && status !== 'Done')} className="w-full rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white transition disabled:opacity-40 hover:bg-indigo-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500">
-          {!canSubmit ? 'Sign in to use this tool' : status === 'Done' ? 'Processed — download below' : 'Process file'}
+        <button type="button" onClick={submitJob} disabled={!canSubmit || uploading || !!error || (!!status && status !== 'Done')} className="w-full rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white transition disabled:opacity-40 hover:bg-indigo-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500">
+          {uploading ? (
+            <span className="inline-flex items-center gap-2">
+              <svg className="h-4 w-4 animate-spin" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
+                <path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83" />
+              </svg>
+              Processing…
+            </span>
+          ) : !canSubmit ? (
+            'Sign in to use this tool'
+          ) : status === 'Done' ? (
+            'Processed — download below'
+          ) : (
+            'Process file'
+          )}
         </button>
         {error && <div role="alert" className="rounded-lg bg-red-50 p-3 text-sm text-red-700">{error}</div>}
         {status && status !== 'Done' && (

@@ -53,7 +53,12 @@ function AppShell({ children }: { children: React.ReactNode }) {
       </main>
       <footer className="mt-auto border-t bg-white">
         <div className="mx-auto max-w-6xl px-4 py-6 text-center text-xs text-slate-500">
-          © {new Date().getFullYear()} DocuForge. All tools run in-browser with server-side processing.
+          <div className="mb-2 flex flex-wrap justify-center gap-4">
+            <a href="/terms" className="transition hover:text-indigo-600">Terms</a>
+            <a href="/privacy" className="transition hover:text-indigo-600">Privacy</a>
+            <a href="/contact" className="transition hover:text-indigo-600">Contact</a>
+          </div>
+          <p>© {new Date().getFullYear()} DocuForge. All tools run in-browser with server-side processing.</p>
         </div>
       </footer>
     </div>
