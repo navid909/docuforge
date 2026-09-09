@@ -73,6 +73,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
 export function useAuth() {
   const ctx = useContext(AuthContext);
-  if (!ctx) throw new Error('useAuth must be used within AuthProvider');
+  if (!ctx) {
+    // Graceful fallback — don't crash SSR or client when AuthProvider is missing
+    return {
+      account: null,
+      loading: false,
+      login: async () => {},
+      logout: () => {},
+    };
+  }
   return ctx;
 }
