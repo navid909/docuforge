@@ -14,7 +14,7 @@ const downloadParamsSchema = z.object({ jobId: z.string().min(1) });
 const convertResponseSchema = z.object({ jobId: z.string(), status: z.string(), tool: z.string(), createdAt: z.string() });
 const statusResponseSchema = z.object({ jobId: z.string(), status: z.string(), progress: z.number(), downloadUrl: z.string().optional(), error: z.string().optional(), createdAt: z.string() });
 
-// ─── Raw multipart parser (like /dump uses) ───
+// Parse raw multipart body (same logic as /dump)
 function parseRawMultipart(rawBody, boundary) {
   const str = rawBody.toString('binary');
   const parts = [];
@@ -40,10 +40,9 @@ function parseRawMultipart(rawBody, boundary) {
   return parts;
 }
 
-async function readPartToBuffer(part) {
-  if (!part.file) return null;
+async function readAll(stream) {
   const chunks = [];
-  for await (const chunk of part.file) chunks.push(chunk);
+  for await (const chunk of stream) chunks.push(chunk);
   return Buffer.concat(chunks);
 }
 
@@ -51,7 +50,7 @@ export async function apiRoutes(fastify) {
 
   // Debug: dump raw body
   fastify.post('/dump', async (request, reply) => {
-    const raw = request.rawBody || (request.raw?.read ? await request.raw.read() : Buffer.from([]));
+    const raw = await readAll(request.raw);
     const ct = request.headers['content-type'] || '';
     const boundary = ct.match(/boundary=([^\s;]+)/)?.[1] || 'unknown';
     const parts = boundary !== 'unknown' ? parseRawMultipart(raw, boundary) : [];
@@ -61,36 +60,51 @@ export async function apiRoutes(fastify) {
       rawBodyLength: raw.length,
       rawBodyText: raw.toString('binary').substring(0, 500),
       parsedParts: parts.map(p => ({ type: p.type, name: p.name, value: p.value, filename: p.filename, size: p.data?.length })),
+      query: request.query,
     };
   });
 
-  // MAIN: use raw body parsing instead of request.parts()
+  // MAIN: read raw body as stream, parse manually
   fastify.post('/convert', async (request, reply) => {
     try {
-      // Read raw body
-      const raw = request.rawBody || (request.raw?.read ? await request.raw.read() : Buffer.from([]));
-      
-      if (!raw || raw.length === 0) {
-        return reply.code(400).send({ success: false, error: 'Empty request body.' });
+      // Read raw body as stream (this is what Fastify provides)
+      const raw = await readAll(request.raw);
+      const rawLen = raw.length;
+
+      if (rawLen === 0) {
+        return reply.code(422).send({
+          success: false,
+          error: 'Empty request body — raw body stream returned 0 bytes.',
+          diagnostic: {
+            hasRawBody: !!request.rawBody,
+            rawBodyLength: request.rawBody?.length || 0,
+            query: request.query,
+            headers: {
+              'content-type': request.headers['content-type'],
+              'content-length': request.headers['content-length'],
+            },
+          },
+        });
       }
 
       const ct = request.headers['content-type'] || '';
       const boundary = ct.match(/boundary=([^\s;]+)/)?.[1] || null;
 
       if (!boundary) {
-        return reply.code(400).send({ success: false, error: 'Not multipart: missing boundary in Content-Type.' });
+        return reply.code(400).send({ success: false, error: 'Not multipart: missing boundary.' });
       }
 
-      // Parse raw body
       const parts = parseRawMultipart(raw, boundary);
       const fields = parts.filter(p => p.type === 'field');
       const files = parts.filter(p => p.type === 'file');
 
-      // Extract tool
+      // Extract tool from multipart fields
       let tool = null;
       for (const f of fields) {
         if (f.name === 'tool') { tool = f.value; break; }
       }
+
+      // Fallback: query param
       if (!tool) {
         tool = request.query?.tool || request.query?.tool_name || null;
       }
@@ -103,19 +117,17 @@ export async function apiRoutes(fastify) {
             parsedFields: fields.map(f => ({ name: f.name, value: f.value })),
             toolFromQuery: request.query?.tool || request.query?.tool_name,
             fileCount: files.length,
-            rawBoundary: boundary,
-            rawBodyLen: raw.length,
+            rawLen,
           },
         });
       }
 
       if (files.length === 0) {
-        return reply.code(422).send({ success: false, error: 'Missing file in upload.' });
+        return reply.code(422).send({ success: false, error: 'Missing file.' });
       }
 
       const firstFile = files[0];
 
-      // Validate with Zod
       const parsed = toolSchema.safeParse({ tool, file: firstFile, files, pages: null });
       if (!parsed.success) {
         return reply.code(422).send({ success: false, error: parsed.error.issues.map(e => e.message).join(', ') });
@@ -123,7 +135,6 @@ export async function apiRoutes(fastify) {
 
       const { tool: finalTool } = parsed.data;
 
-      // Tool dispatch map
       const toolMap = {
         'pdf-to-word': 'pdfToWord', 'image-to-pdf': 'imageToPdf', 'compress-pdf': 'compressPdf',
         'ocr-image': 'ocrImage', 'pdf-to-excel': 'pdfToExcel', 'pdf-to-ppt': 'pdfToPpt',
@@ -135,19 +146,16 @@ export async function apiRoutes(fastify) {
       const toolFn = toolMap[finalTool];
       if (!toolFn) return reply.code(400).send({ success: false, error: `Unsupported tool: ${finalTool}` });
 
-      // Merge PDFs (multiple files)
       if (finalTool === 'merge-pdfs') {
-        if (files.length < 2) return reply.code(422).send({ success: false, error: 'Merge PDFs needs 2+ files.' });
+        if (files.length < 2) return reply.code(422).send({ success: false, error: 'Merge needs 2+ files.' });
         return handleMerge(fastify, reply, finalTool, toolFn, files);
       }
 
-      // Single file tools
       try {
         const jobId = crypto.randomUUID();
         const jobDir = path.join(TMP_DIR, jobId);
         await fs.ensureDir(jobDir);
 
-        // Write uploaded file to disk
         const ext = path.extname(firstFile.filename || 'file') || '.bin';
         const inputPath = path.join(jobDir, `input${ext}`);
         await fs.writeFile(inputPath, firstFile.data);
@@ -164,7 +172,7 @@ export async function apiRoutes(fastify) {
           download: { filename: finalName, url: `/download/${jobId}/${finalName}` },
         });
       } catch (error) {
-        fastify.log.error({ error, tool: finalTool }, 'Tool processing failed');
+        fastify.log.error({ error, tool: finalTool }, 'Tool failed');
         throw error;
       }
     } catch (error) {
@@ -179,27 +187,19 @@ export async function apiRoutes(fastify) {
       const jobId = crypto.randomUUID();
       const jobDir = path.join(TMP_DIR, jobId);
       await fs.ensureDir(jobDir);
-
-      const inputPaths = [];
+      const paths = [];
       for (let i = 0; i < files.length; i++) {
         const ext = path.extname(files[i].filename || 'pdf') || '.pdf';
         const p = path.join(jobDir, `input_${i}${ext}`);
         await fs.writeFile(p, files[i].data);
-        inputPaths.push(p);
+        paths.push(p);
       }
-
-      const outputFile = path.join(jobDir, `output_${Date.now()}.pdf`);
+      const out = path.join(jobDir, `output_${Date.now()}.pdf`);
       const tools = await import('../tools/index.js');
-      const result = await fn(inputPaths, outputFile);
+      const result = await fn(paths, out);
       const outPath = Array.isArray(result) ? result[0] : result;
-      return convertResponseSchema.parse({
-        jobId, status: 'completed', tool, createdAt: new Date().toISOString(),
-        download: { filename: path.basename(outPath), url: `/download/${jobId}/${path.basename(outPath)}` },
-      });
-    } catch (error) {
-      fastify.log.error({ error }, 'Merge failed');
-      throw error;
-    }
+      return convertResponseSchema.parse({ jobId, status: 'completed', tool, createdAt: new Date().toISOString(), download: { filename: path.basename(outPath), url: `/download/${jobId}/${path.basename(outPath)}` } });
+    } catch (error) { fastify.log.error({ error }, 'Merge failed'); throw error; }
   }
 
   fastify.get('/status/:jobId', async (request, reply) => {
@@ -210,22 +210,9 @@ export async function apiRoutes(fastify) {
         const entries = await fs.readdir(jobDir);
         const out = entries.find(n => n.startsWith('output_'));
         if (!out) throw new Error('no output');
-        return statusResponseSchema.parse({
-          jobId, status: 'completed', progress: 100,
-          downloadUrl: `/download/${jobId}/${out}`, error: null,
-          createdAt: new Date().toISOString(),
-        });
-      } catch {
-        return statusResponseSchema.parse({
-          jobId, status: 'failed', progress: 0,
-          downloadUrl: undefined, error: 'Not found or expired.',
-          createdAt: new Date().toISOString(),
-        });
-      }
-    } catch (e) {
-      if (e instanceof z.ZodError) return reply.code(400).send({ success: false, error: e.errors.map(x => x.message).join(', ') });
-      return reply.code(500).send({ success: false, error: 'Server error.' });
-    }
+        return statusResponseSchema.parse({ jobId, status: 'completed', progress: 100, downloadUrl: `/download/${jobId}/${out}`, error: null, createdAt: new Date().toISOString() });
+      } catch { return statusResponseSchema.parse({ jobId, status: 'failed', progress: 0, downloadUrl: undefined, error: 'Not found.', createdAt: new Date().toISOString() }); }
+    } catch (e) { if (e instanceof z.ZodError) return reply.code(400).send({ success: false, error: e.errors.map(x => x.message).join(', ') }); return reply.code(500).send({ success: false, error: 'Error.' }); }
   });
 
   fastify.get('/download/:jobId/*', async (request, reply) => {
@@ -233,13 +220,10 @@ export async function apiRoutes(fastify) {
       const jobId = downloadParamsSchema.parse(request.params).jobId;
       const filename = request.params['*'];
       const candidate = path.join(TMP_DIR, jobId, filename || '');
-      try { await fs.stat(candidate); } catch { return reply.status(404).send({ success: false, error: 'Not found or expired.' }); }
+      try { await fs.stat(candidate); } catch { return reply.status(404).send({ success: false, error: 'Not found.' }); }
       reply.type('application/octet-stream');
       reply.header('Content-Disposition', `attachment; filename="${filename || jobId}"`);
       return fs.createReadStream(candidate);
-    } catch (e) {
-      if (e instanceof z.ZodError) return reply.code(400).send({ success: false, error: e.errors.map(x => x.message).join(', ') });
-      return reply.code(500).send({ success: false, error: 'Error.' });
-    }
+    } catch (e) { if (e instanceof z.ZodError) return reply.code(400).send({ success: false, error: e.errors.map(x => x.message).join(', ') }); return reply.code(500).send({ success: false, error: 'Error.' }); }
   });
 }
