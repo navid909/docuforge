@@ -9,13 +9,16 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const BASE_DIR = path.resolve(__dirname, '..', '..');
 const TMP_DIR = path.join(BASE_DIR, 'tmp');
 
+// ─── VISIBLE MARKER: this exact string proves this version is deployed ───
+const DEPLOYED_VERSION = 'RAW-BODY-FIX-ddff1a0';
+
 const toolSchema = z.object({ tool: z.string().min(1), file: z.any().optional(), files: z.any().optional(), pages: z.string().optional() });
 const statusParamsSchema = z.object({ jobId: z.string().min(1) });
 const downloadParamsSchema = z.object({ jobId: z.string().min(1) });
 const convertResponseSchema = z.object({ jobId: z.string(), status: z.string(), tool: z.string(), createdAt: z.string() });
 const statusResponseSchema = z.object({ jobId: z.string(), status: z.string(), progress: z.number(), downloadUrl: z.string().optional(), error: z.string().optional(), createdAt: z.string() });
 
-// Parse raw multipart body (same logic as /dump)
+// Parse raw multipart body
 function parseRawMultipart(rawBody, boundary) {
   const str = rawBody.toString('binary');
   const parts = [];
@@ -50,6 +53,11 @@ async function readPartToBuffer(part) {
 
 export async function apiRoutes(fastify) {
 
+  // VISIBLE MARKER endpoint
+  fastify.get('/version', async () => {
+    return { version: DEPLOYED_VERSION, deployedAt: new Date().toISOString() };
+  });
+
   // Debug: dump raw body
   fastify.post('/dump', async (request, reply) => {
     const raw = await readAll(request.raw);
@@ -57,6 +65,7 @@ export async function apiRoutes(fastify) {
     const boundary = ct.match(/boundary=([^\s;]+)/)?.[1] || 'unknown';
     const parts = boundary !== 'unknown' ? parseRawMultipart(raw, boundary) : [];
     return {
+      version: DEPLOYED_VERSION,
       contentType: ct,
       boundary,
       rawBodyLength: raw.length,
@@ -66,10 +75,10 @@ export async function apiRoutes(fastify) {
     };
   });
 
-  // MAIN: read raw body as stream, parse manually — SAME PATTERN AS /dump
+  // MAIN: read raw body as stream, parse manually
   fastify.post('/convert', async (request, reply) => {
     try {
-      // ─── READ RAW BODY (identical to /dump) ───
+      // READ RAW BODY (same pattern as /dump)
       const raw = await readAll(request.raw);
       const rawLen = raw.length;
 
@@ -77,12 +86,11 @@ export async function apiRoutes(fastify) {
         return reply.code(422).send({
           success: false,
           error: 'Empty request body — raw body stream returned 0 bytes.',
+          version: DEPLOYED_VERSION,
           diagnostic: {
             rawLen,
-            headers: {
-              'content-type': request.headers['content-type'],
-              'content-length': request.headers['content-length'],
-            },
+            contentLength: request.headers['content-length'],
+            contentType: request.headers['content-type'],
             query: request.query,
           },
         });
@@ -92,7 +100,7 @@ export async function apiRoutes(fastify) {
       const boundary = ct.match(/boundary=([^\s;]+)/)?.[1] || null;
 
       if (!boundary) {
-        return reply.code(400).send({ success: false, error: 'Not multipart: missing boundary in Content-Type.' });
+        return reply.code(400).send({ success: false, error: 'Not multipart: missing boundary.', version: DEPLOYED_VERSION });
       }
 
       const parts = parseRawMultipart(raw, boundary);
@@ -111,6 +119,7 @@ export async function apiRoutes(fastify) {
         return reply.code(422).send({
           success: false,
           error: 'Missing tool field.',
+          version: DEPLOYED_VERSION,
           diagnostic: {
             fields: fields.map(f => ({ name: f.name, value: f.value })),
             toolFromQuery: request.query?.tool || request.query?.tool_name,
@@ -121,14 +130,14 @@ export async function apiRoutes(fastify) {
       }
 
       if (files.length === 0) {
-        return reply.code(422).send({ success: false, error: 'Missing file in upload.' });
+        return reply.code(422).send({ success: false, error: 'Missing file in upload.', version: DEPLOYED_VERSION });
       }
 
       const firstFile = files[0];
 
       const parsed = toolSchema.safeParse({ tool, file: firstFile, files, pages: null });
       if (!parsed.success) {
-        return reply.code(422).send({ success: false, error: parsed.error.issues.map(e => e.message).join(', ') });
+        return reply.code(422).send({ success: false, error: parsed.error.issues.map(e => e.message).join(', '), version: DEPLOYED_VERSION });
       }
 
       const { tool: finalTool } = parsed.data;
@@ -142,10 +151,10 @@ export async function apiRoutes(fastify) {
       };
 
       const toolFn = toolMap[finalTool];
-      if (!toolFn) return reply.code(400).send({ success: false, error: `Unsupported tool: ${finalTool}` });
+      if (!toolFn) return reply.code(400).send({ success: false, error: `Unsupported tool: ${finalTool}`, version: DEPLOYED_VERSION });
 
       if (finalTool === 'merge-pdfs') {
-        if (files.length < 2) return reply.code(422).send({ success: false, error: 'Merge needs 2+ files.' });
+        if (files.length < 2) return reply.code(422).send({ success: false, error: 'Merge needs 2+ files.', version: DEPLOYED_VERSION });
         return handleMerge(fastify, reply, finalTool, toolFn, files);
       }
 
@@ -174,9 +183,9 @@ export async function apiRoutes(fastify) {
         throw error;
       }
     } catch (error) {
-      if (error instanceof z.ZodError) return reply.code(422).send({ success: false, error: error.errors.map(e => e.message).join(', ') });
+      if (error instanceof z.ZodError) return reply.code(422).send({ success: false, error: error.errors.map(e => e.message).join(', '), version: DEPLOYED_VERSION });
       fastify.log.error(error);
-      return reply.code(500).send({ success: false, error: 'Processing failed.' });
+      return reply.code(500).send({ success: false, error: 'Processing failed.', version: DEPLOYED_VERSION });
     }
   });
 
