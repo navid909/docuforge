@@ -3,6 +3,7 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import crypto from 'crypto';
 import { z } from 'zod';
+import { readAll } from 'node:stream/consumers';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const BASE_DIR = path.resolve(__dirname, '..', '..');
@@ -14,6 +15,32 @@ const downloadParamsSchema = z.object({ jobId: z.string().min(1) });
 const convertResponseSchema = z.object({ jobId: z.string(), status: z.string(), tool: z.string(), createdAt: z.string() });
 const statusResponseSchema = z.object({ jobId: z.string(), status: z.string(), progress: z.number(), downloadUrl: z.string().optional(), error: z.string().optional(), createdAt: z.string() });
 
+// Parse raw multipart body (same logic as /dump)
+function parseRawMultipart(rawBody, boundary) {
+  const str = rawBody.toString('binary');
+  const parts = [];
+  const sections = str.split('--' + boundary);
+  for (const sec of sections) {
+    const trimmed = sec.trim();
+    if (!trimmed || trimmed === '--') continue;
+    const headerEnd = trimmed.indexOf('\r\n\r\n');
+    if (headerEnd === -1) continue;
+    const headers = trimmed.substring(0, headerEnd);
+    let body = trimmed.substring(headerEnd + 4);
+    if (body.endsWith('\r\n')) body = body.slice(0, -2);
+    const nameM = headers.match(/name="([^"]+)"/);
+    const fnM = headers.match(/filename="([^"]+)"/);
+    const name = nameM ? nameM[1] : null;
+    const filename = fnM ? fnM[1] : null;
+    if (filename) {
+      parts.push({ type: 'file', name, filename, data: Buffer.from(body, 'binary') });
+    } else if (name) {
+      parts.push({ type: 'field', name, value: body.trim() });
+    }
+  }
+  return parts;
+}
+
 async function readPartToBuffer(part) {
   if (!part.file) return null;
   const chunks = [];
@@ -23,102 +50,78 @@ async function readPartToBuffer(part) {
 
 export async function apiRoutes(fastify) {
 
-  // Use request.parts() — the official v8+ API
-  // BUT we read each field's value as a string by consuming the part body
+  // Debug: dump raw body
+  fastify.post('/dump', async (request, reply) => {
+    const raw = await readAll(request.raw);
+    const ct = request.headers['content-type'] || '';
+    const boundary = ct.match(/boundary=([^\s;]+)/)?.[1] || 'unknown';
+    const parts = boundary !== 'unknown' ? parseRawMultipart(raw, boundary) : [];
+    return {
+      contentType: ct,
+      boundary,
+      rawBodyLength: raw.length,
+      rawBodyText: raw.toString('binary').substring(0, 500),
+      parsedParts: parts.map(p => ({ type: p.type, name: p.name, value: p.value, filename: p.filename, size: p.data?.length })),
+      query: request.query,
+    };
+  });
+
+  // MAIN: read raw body as stream, parse manually — SAME PATTERN AS /dump
   fastify.post('/convert', async (request, reply) => {
     try {
-      // Iterate parts using the multipart plugin's API
-      const parts = [];
-      for await (const part of request.parts()) {
-        // DEBUG: log all part properties
-        const partKeys = Object.keys(part).filter(k => !k.startsWith('raw') && !k.startsWith('headers'));
-        const partInfo = {};
-        for (const k of partKeys) {
-          let v = part[k];
-          if (typeof v === 'function') v = '[Function: ' + k + ']';
-          else if (v instanceof Buffer) v = '[Buffer: ' + v.length + ' bytes]';
-          else if (v && typeof v === 'object') v = '[Object]';
-          partInfo[k] = v;
-        }
+      // ─── READ RAW BODY (identical to /dump) ───
+      const raw = await readAll(request.raw);
+      const rawLen = raw.length;
 
-        const p = {
-          type: part.type,
-          fieldname: part.fieldname,
-          filename: part.filename,
-          contentType: part.contentType,
-          debug: partInfo,
-        };
-
-        if (part.type === 'field') {
-          // Read field value from the part body stream
-          let body = null;
-          try {
-            // Try Node.js stream .read() first
-            if (typeof part.read === 'function') {
-              body = part.read();
-            }
-          } catch (e) { fastify.log.warn({ e }, 'part.read() failed'); }
-          if (body === null || body === undefined) {
-            try {
-              // Try .value property
-              if (part.value !== undefined && part.value !== null) {
-                body = part.value;
-              }
-            } catch (e) { fastify.log.warn({ e }, 'part.value failed'); }
-          }
-          if (body === null || body === undefined) {
-            // Try consuming as a stream via .file
-            try {
-              const chunks = [];
-              const stream = (part.file && typeof part.file === 'object') ? part.file : null;
-              if (stream && typeof stream[Symbol.asyncIterator] === 'function') {
-                for await (const chunk of stream) chunks.push(chunk);
-                body = Buffer.concat(chunks).toString().trim();
-              }
-            } catch (e) { fastify.log.warn({ e }, 'part.file stream failed'); }
-          }
-          p.value = body ? body.toString().trim() : null;
-        } else if (part.type === 'file') {
-          p.file = part.file; // keep stream reference for later
-        }
-
-        parts.push(p);
+      if (rawLen === 0) {
+        return reply.code(422).send({
+          success: false,
+          error: 'Empty request body — raw body stream returned 0 bytes.',
+          diagnostic: {
+            rawLen,
+            headers: {
+              'content-type': request.headers['content-type'],
+              'content-length': request.headers['content-length'],
+            },
+            query: request.query,
+          },
+        });
       }
 
-      // DEBUG: log all parts
-      fastify.log.info({ parts: parts.map(p => ({ type: p.type, fieldname: p.fieldname, filename: p.filename, value: p.value, hasFile: !!p.file })) }, 'ALL PARTS COLLECTED');
+      const ct = request.headers['content-type'] || '';
+      const boundary = ct.match(/boundary=([^\s;]+)/)?.[1] || null;
 
+      if (!boundary) {
+        return reply.code(400).send({ success: false, error: 'Not multipart: missing boundary in Content-Type.' });
+      }
+
+      const parts = parseRawMultipart(raw, boundary);
       const fields = parts.filter(p => p.type === 'field');
       const files = parts.filter(p => p.type === 'file');
 
-      // Extract tool
+      // Extract tool from multipart fields
       let tool = null;
       for (const f of fields) {
-        if (f.fieldname === 'tool' && f.value) {
-          tool = f.value;
-          break;
-        }
+        if (f.name === 'tool') { tool = f.value; break; }
       }
-
       // Fallback: query param
-      if (!tool) {
-        tool = request.query?.tool || request.query?.tool_name || null;
-      }
+      if (!tool) tool = request.query?.tool || request.query?.tool_name || null;
 
       if (!tool) {
         return reply.code(422).send({
           success: false,
           error: 'Missing tool field.',
           diagnostic: {
-            fields: fields.map(f => ({ fieldname: f.fieldname, value: f.value })),
-            files: files.map(f => ({ fieldname: f.fieldname, filename: f.filename })),
+            fields: fields.map(f => ({ name: f.name, value: f.value })),
             toolFromQuery: request.query?.tool || request.query?.tool_name,
+            fileCount: files.length,
+            rawLen,
           },
         });
       }
 
       if (files.length === 0) {
-        return reply.code(422).send({ success: false, error: 'Missing file.' });
+        return reply.code(422).send({ success: false, error: 'Missing file in upload.' });
       }
 
       const firstFile = files[0];
@@ -151,15 +154,9 @@ export async function apiRoutes(fastify) {
         const jobDir = path.join(TMP_DIR, jobId);
         await fs.ensureDir(jobDir);
 
-        const buffer = await readPartToBuffer(firstFile);
-        if (!buffer || buffer.length === 0) {
-          await fs.remove(jobDir).catch(() => {});
-          return reply.code(422).send({ success: false, error: 'Empty file.' });
-        }
-
         const ext = path.extname(firstFile.filename || 'file') || '.bin';
         const inputPath = path.join(jobDir, `input${ext}`);
-        await fs.writeFile(inputPath, buffer);
+        await fs.writeFile(inputPath, firstFile.data);
 
         const outputFile = path.join(jobDir, `output_${Date.now()}.bin`);
         const tools = await import('../tools/index.js');
@@ -190,10 +187,9 @@ export async function apiRoutes(fastify) {
       await fs.ensureDir(jobDir);
       const paths = [];
       for (let i = 0; i < files.length; i++) {
-        const buf = await readPartToBuffer(files[i]);
         const ext = path.extname(files[i].filename || 'pdf') || '.pdf';
         const p = path.join(jobDir, `input_${i}${ext}`);
-        await fs.writeFile(p, buf);
+        await fs.writeFile(p, files[i].data);
         paths.push(p);
       }
       const out = path.join(jobDir, `output_${Date.now()}.pdf`);
