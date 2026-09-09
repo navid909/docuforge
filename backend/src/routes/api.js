@@ -49,42 +49,39 @@ async function readPartToBuffer(part) {
 }
 
 export async function apiRoutes(fastify) {
-  // DEBUG: echo endpoint to see what the server receives
-  fastify.get('/echo', async (request, reply) => {
-    return {
-      query: request.query,
-      headers: request.headers,
-      method: request.method,
-      url: request.url,
-      hasBody: !!request.body,
-      bodyType: typeof request.body,
-      body: request.body,
-    };
+  // VISIBLE MARKER: confirms this specific code version is deployed
+  fastify.get('/marker', async () => {
+    return { marker: 'DEPLOYED-v33c4d80', timestamp: new Date().toISOString() };
   });
 
   fastify.post('/convert', async (request, reply) => {
     try {
-      // Check ALL sources of tool
-      const toolFromQuery = request.query?.tool || request.query?.tool_name;
-      const toolFromBody = request.body?.tool;
-      const tool = toolFromQuery || toolFromBody;
-
-      // Collect file parts
-      const fileParts = [];
+      // Collect ALL multipart parts (fields + files) via v8+ iterator
+      const parts = [];
       for await (const part of request.parts()) {
-        fileParts.push(part);
+        parts.push(part);
       }
+
+      // Extract tool from multipart field OR query string
+      let tool = null;
+      for (const part of parts) {
+        if (part.type === 'field' && part.fieldname === 'tool' && part.value) {
+          tool = String(part.value);
+          break;
+        }
+      }
+      if (!tool) {
+        tool = request.query?.tool || request.query?.tool_name || null;
+      }
+
+      const fileParts = parts.filter((p) => p.type === 'file');
 
       if (!tool) {
         return reply.code(422).send({
           success: false,
-          error: 'Missing tool field. Send as ?tool=image-to-pdf in URL.',
-          debug: {
-            toolFromQuery,
-            toolFromBody,
-            filePartsCount: fileParts.length,
-            queryKeys: Object.keys(request.query || {}),
-          },
+          error: 'Missing tool field. Send as ?tool=image-to-pdf in URL or as multipart field.',
+          receivedParts: parts.map((p) => ({ type: p.type, fieldname: p.fieldname, filename: p.filename })),
+          queryKeys: Object.keys(request.query || {}),
         });
       }
 
@@ -96,8 +93,9 @@ export async function apiRoutes(fastify) {
       }
 
       const firstFile = fileParts[0];
+      const files = fileParts;
 
-      const parsed = toolSchema.safeParse({ tool, file: firstFile, files: fileParts, pages: null });
+      const parsed = toolSchema.safeParse({ tool, file: firstFile, files, pages: null });
       if (!parsed.success) {
         return reply.code(422).send({ success: false, error: parsed.error.issues.map((e) => e.message).join(', ') });
       }
@@ -226,7 +224,7 @@ export async function apiRoutes(fastify) {
 
       try {
         const entries = await fs.readdir(jobDir);
-        const output = entries.find((n) => n.startsWith('output_'));
+        const output = entries.find((n) => n.startswith('output_'));
         if (!output) throw new Error('No output');
         const response = {
           jobId,
