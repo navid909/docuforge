@@ -30,11 +30,23 @@ export async function apiRoutes(fastify) {
       // Iterate parts using the multipart plugin's API
       const parts = [];
       for await (const part of request.parts()) {
+        // DEBUG: log all part properties
+        const partKeys = Object.keys(part).filter(k => !k.startsWith('raw') && !k.startsWith('headers'));
+        const partInfo = {};
+        for (const k of partKeys) {
+          let v = part[k];
+          if (typeof v === 'function') v = '[Function: ' + k + ']';
+          else if (v instanceof Buffer) v = '[Buffer: ' + v.length + ' bytes]';
+          else if (v && typeof v === 'object') v = '[Object]';
+          partInfo[k] = v;
+        }
+
         const p = {
           type: part.type,
           fieldname: part.fieldname,
           filename: part.filename,
           contentType: part.contentType,
+          debug: partInfo,
         };
 
         if (part.type === 'field') {
@@ -45,17 +57,17 @@ export async function apiRoutes(fastify) {
             if (typeof part.read === 'function') {
               body = part.read();
             }
-          } catch (e) {}
+          } catch (e) { fastify.log.warn({ e }, 'part.read() failed'); }
           if (body === null || body === undefined) {
             try {
               // Try .value property
               if (part.value !== undefined && part.value !== null) {
                 body = part.value;
               }
-            } catch (e) {}
+            } catch (e) { fastify.log.warn({ e }, 'part.value failed'); }
           }
           if (body === null || body === undefined) {
-            // Try consuming as a stream
+            // Try consuming as a stream via .file
             try {
               const chunks = [];
               const stream = (part.file && typeof part.file === 'object') ? part.file : null;
@@ -63,7 +75,7 @@ export async function apiRoutes(fastify) {
                 for await (const chunk of stream) chunks.push(chunk);
                 body = Buffer.concat(chunks).toString().trim();
               }
-            } catch (e) {}
+            } catch (e) { fastify.log.warn({ e }, 'part.file stream failed'); }
           }
           p.value = body ? body.toString().trim() : null;
         } else if (part.type === 'file') {
@@ -72,6 +84,9 @@ export async function apiRoutes(fastify) {
 
         parts.push(p);
       }
+
+      // DEBUG: log all parts
+      fastify.log.info({ parts: parts.map(p => ({ type: p.type, fieldname: p.fieldname, filename: p.filename, value: p.value, hasFile: !!p.file })) }, 'ALL PARTS COLLECTED');
 
       const fields = parts.filter(p => p.type === 'field');
       const files = parts.filter(p => p.type === 'file');
