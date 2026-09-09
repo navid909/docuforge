@@ -51,41 +51,88 @@ async function getFileBuffer(file) {
 export async function apiRoutes(fastify) {
   fastify.post('/convert', async (request, reply) => {
     try {
-      fastify.log.info({ hasParts: typeof request.parts === 'function' }, 'multipart check');
+      fastify.log.info({ rawBody: request.rawBody, raw: request.raw }, 'RAW REQUEST');
 
-      // Diagnostic: collect all parts first
-      const allParts = [];
-      for await (const part of request.parts()) {
-        allParts.push({
-          type: part.type,
-          fieldname: part.fieldname || null,
-          filename: part.filename || null,
-          value: part.type === 'field' ? part.value : null,
-        });
+      // Dump entire raw request object first
+      const rawDump = {
+        hasBody: !!request.body,
+        bodyType: typeof request.body,
+        body: request.body,
+        rawBody: request.rawBody ? `[${request.rawBody.length}] bytes` : null,
+        rawHeaders: request.raw.headers,
+        contentType: request.headers['content-type'],
+        contentLength: request.headers['content-length'],
+        partsCount: 0,
+      };
+
+      // Try to iterate parts
+      let parts = [];
+      try {
+        for await (const part of request.parts()) {
+          parts.push({
+            type: part.type,
+            fieldname: part.fieldname,
+            filename: part.filename,
+            value: part.value ? String(part.value).substring(0, 100) : null,
+            contentType: part.contentType,
+            fileSize: part.file ? 'stream' : null,
+          });
+        }
+        rawDump.partsCount = parts.length;
+        rawDump.parts = parts;
+        fastify.log.info({ parts, rawDump }, 'PARTS ITERATION SUCCESS');
+      } catch (err) {
+        rawDump.partsError = err.message;
+        fastify.log.error({ err }, 'PARTS ITERATION FAILED');
       }
-      fastify.log.info({ partsCount: allParts.length, parts: allParts }, 'all multipart parts');
 
-      // Now parse
+      // Also try request.file() for file parts
+      let fileField = null;
+      try {
+        const f = await request.file();
+        if (f) {
+          fileField = {
+            filename: f.filename,
+            fieldname: f.fieldname,
+            encoding: f.encoding,
+            mimeType: f.mimeType,
+            hasStream: !!f.file,
+          };
+          rawDump.fileField = fileField;
+          fastify.log.info({ fileField }, 'REQUEST.FILE() RESULT');
+        }
+      } catch (err) {
+        rawDump.fileFieldError = err.message;
+      }
+
+      fastify.log.info(rawDump, 'FULL RAW DUMP DONE');
+
+      // Parse from collected parts
       let tool = null, file = null, files = [], pages = null;
-      for (const part of allParts) {
-        if (part.type === 'field') {
-          if (part.fieldname === 'tool') tool = part.value;
-          else if (part.fieldname === 'pages') pages = part.value;
-        } else if (part.type === 'file') {
-          if (part.fieldname === 'file') file = part;
-          else if (part.fieldname === 'files') files.push(part);
+      for (const p of parts) {
+        if (p.type === 'field') {
+          fastify.log.info({ p }, 'FIELD PART FOUND');
+          if (p.fieldname === 'tool') tool = p.value;
+          else if (p.fieldname === 'pages') pages = p.value;
+        } else if (p.type === 'file') {
+          if (p.fieldname === 'file') file = p;
+          else if (p.fieldname === 'files') files.push(p);
         }
       }
-
-      fastify.log.info({ tool, hasFile: !!file, fileCount: files.length }, 'parsed values');
+      fastify.log.info({ tool, hasFile: !!file, fileCount: files.length }, 'PARSED VALUES');
 
       if (!tool) {
-        return reply.code(422).send({ success: false, error: 'Missing tool field in multipart form.' });
+        return reply.code(422).send({
+          success: false,
+          error: `No tool field found. Parts: ${JSON.stringify(parts, null, 2)}`,
+          rawBodyPresent: !!request.body,
+          rawBodyHex: request.rawBody ? Buffer.from(request.rawBody).toString('hex').substring(0, 200) : null,
+          contentType: request.headers['content-type'],
+        });
       }
 
       const parsed = toolSchema.safeParse({ tool, file, files, pages });
       if (!parsed.success) {
-        fastify.log.info({ issues: parsed.error.issues }, 'validation failed');
         return reply.code(422).send({ success: false, error: parsed.error.issues.map((e) => e.message).join(', ') });
       }
 
@@ -114,17 +161,12 @@ export async function apiRoutes(fastify) {
       }
 
       const needsFile = !['merge-pdfs'].includes(finalTool);
-      const hasFile = !needsFile || (finalTool === 'merge-pdfs' ? finalFiles && finalFiles.length : !!finalFile);
-
-      if (!hasFile) {
-        return reply.code(422).send({ success: false, error: 'Missing required file(s) for this tool.' });
-      }
-
-      const jobId = crypto.randomUUID();
-      const jobDir = path.join(TMP_DIR, jobId);
-      await fs.ensureDir(jobDir);
 
       try {
+        const jobId = crypto.randomUUID();
+        const jobDir = path.join(TMP_DIR, jobId);
+        await fs.ensureDir(jobDir);
+
         const inputFiles = [];
         const outputFile = path.join(jobDir, `output_${Date.now()}.bin`);
 
@@ -148,7 +190,13 @@ export async function apiRoutes(fastify) {
           }
         }
 
-        if (finalTool === 'merge-pdfs' && !inputFiles.length) {
+        if (needsFile && !inputFiles.length) {
+          await fs.remove(jobDir).catch(() => {});
+          return reply.code(422).send({ success: false, error: 'Missing required file(s) for this tool.' });
+        }
+
+        if (finalTool === 'merge-pdfs' && !inputFiles.length && !finalFiles?.length) {
+          await fs.remove(jobDir).catch(() => {});
           return reply.code(422).send({ success: false, error: 'Missing required files for merge-pdfs.' });
         }
 
@@ -174,7 +222,7 @@ export async function apiRoutes(fastify) {
 
         return convertResponseSchema.parse(response);
       } catch (error) {
-        await fs.remove(jobDir).catch(() => {});
+        await fs.remove(path.join(TMP_DIR, crypto.randomUUID())).catch(() => {});
         throw error;
       }
     } catch (error) {
@@ -196,7 +244,6 @@ export async function apiRoutes(fastify) {
         const entries = await fs.readdir(jobDir);
         const output = entries.find((n) => n.startsWith('output_'));
         if (!output) throw new Error('No output');
-
         const response = {
           jobId,
           status: 'completed',
@@ -231,14 +278,12 @@ export async function apiRoutes(fastify) {
       const jobId = params.jobId;
       const filename = request.params['*'];
       const candidate = path.join(TMP_DIR, jobId, filename || '');
-
       try {
         const stat = await fs.stat(candidate);
         if (!stat.isFile()) throw new Error('Not a file');
       } catch {
         return reply.status(404).send({ success: false, error: 'File not found or expired.' });
       }
-
       reply.type('application/octet-stream');
       reply.header('Content-Disposition', `attachment; filename="${filename || jobId}"`);
       const stream = await fs.createReadStream(candidate);
@@ -248,6 +293,59 @@ export async function apiRoutes(fastify) {
         return reply.code(400).send({ success: false, error: error.errors.map((e) => e.message).join(', ') });
       }
       return reply.code(500).send({ success: false, error: 'Server error.' });
+    }
+  });
+
+  fastify.get('/debug/multipart', async (request, reply) => {
+    try {
+      const rawDump = {
+        hasBody: !!request.body,
+        bodyType: typeof request.body,
+        body: request.body,
+        rawBody: request.rawBody ? `[${request.rawBody.length}] bytes, first 200 hex: ${request.rawBody ? Buffer.from(request.rawBody).toString('hex').substring(0, 200) : 'null'}` : null,
+        rawHeaders: request.raw.headers,
+        contentType: request.headers['content-type'],
+        contentLength: request.headers['content-length'],
+        partsCount: 0,
+        parts: null,
+        fileField: null,
+      };
+
+      try {
+        const parts = [];
+        for await (const part of request.parts()) {
+          parts.push({
+            type: part.type,
+            fieldname: part.fieldname,
+            filename: part.filename,
+            value: part.value ? String(part.value).substring(0, 100) : null,
+            contentType: part.contentType,
+            fileSize: part.file ? 'stream' : null,
+          });
+        }
+        rawDump.partsCount = parts.length;
+        rawDump.parts = parts;
+      } catch (err) {
+        rawDump.partsError = err.message;
+      }
+
+      try {
+        const f = await request.file();
+        if (f) {
+          rawDump.fileField = {
+            filename: f.filename,
+            fieldname: f.fieldname,
+            encoding: f.encoding,
+            mimeType: f.mimeType,
+          };
+        }
+      } catch (err) {
+        rawDump.fileFieldError = err.message;
+      }
+
+      return reply.code(200).send(rawDump);
+    } catch (error) {
+      return reply.code(500).send({ error: error.message });
     }
   });
 }
