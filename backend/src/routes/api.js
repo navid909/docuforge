@@ -51,19 +51,17 @@ async function getFileBuffer(file) {
 export async function apiRoutes(fastify) {
   fastify.post('/convert', async (request, reply) => {
     try {
-      // v8+ multipart: use async iterator instead of request.body
+      // v8+ multipart: use async iterator with part.type + part.fieldname/part.value
       const parts = await request.parts();
       let tool = null, file = null, files = [], pages = null;
 
       for await (const part of parts) {
-        if (part.fieldName === 'tool') {
-          tool = await part.text();
-        } else if (part.fieldName === 'file') {
-          file = part;
-        } else if (part.fieldName === 'files') {
-          files.push(part);
-        } else if (part.fieldName === 'pages') {
-          pages = await part.text();
+        if (part.type === 'field') {
+          if (part.fieldname === 'tool') tool = part.value;
+          else if (part.fieldname === 'pages') pages = part.value;
+        } else if (part.type === 'file') {
+          if (part.fieldname === 'file') file = part;
+          else if (part.fieldname === 'files') files.push(part);
         }
       }
 
