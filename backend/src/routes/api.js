@@ -14,94 +14,75 @@ const downloadParamsSchema = z.object({ jobId: z.string().min(1) });
 const convertResponseSchema = z.object({ jobId: z.string(), status: z.string(), tool: z.string(), createdAt: z.string() });
 const statusResponseSchema = z.object({ jobId: z.string(), status: z.string(), progress: z.number(), downloadUrl: z.string().optional(), error: z.string().optional(), createdAt: z.string() });
 
-// Parse raw multipart body (same logic as /dump)
-function parseRawMultipart(rawBody, boundary) {
-  const str = rawBody.toString('binary');
-  const parts = [];
-  const sections = str.split('--' + boundary);
-  for (const sec of sections) {
-    const trimmed = sec.trim();
-    if (!trimmed || trimmed === '--') continue;
-    const headerEnd = trimmed.indexOf('\r\n\r\n');
-    if (headerEnd === -1) continue;
-    const headers = trimmed.substring(0, headerEnd);
-    let body = trimmed.substring(headerEnd + 4);
-    if (body.endsWith('\r\n')) body = body.slice(0, -2);
-    const nameM = headers.match(/name="([^"]+)"/);
-    const fnM = headers.match(/filename="([^"]+)"/);
-    const name = nameM ? nameM[1] : null;
-    const filename = fnM ? fnM[1] : null;
-    if (filename) {
-      parts.push({ type: 'file', name, filename, data: Buffer.from(body, 'binary') });
-    } else if (name) {
-      parts.push({ type: 'field', name, value: body.trim() });
-    }
-  }
-  return parts;
-}
-
-async function readAll(stream) {
+async function readPartToBuffer(part) {
+  if (!part.file) return null;
   const chunks = [];
-  for await (const chunk of stream) chunks.push(chunk);
+  for await (const chunk of part.file) chunks.push(chunk);
   return Buffer.concat(chunks);
 }
 
 export async function apiRoutes(fastify) {
 
-  // Debug: dump raw body
-  fastify.post('/dump', async (request, reply) => {
-    const raw = await readAll(request.raw);
-    const ct = request.headers['content-type'] || '';
-    const boundary = ct.match(/boundary=([^\s;]+)/)?.[1] || 'unknown';
-    const parts = boundary !== 'unknown' ? parseRawMultipart(raw, boundary) : [];
-    return {
-      contentType: ct,
-      boundary,
-      rawBodyLength: raw.length,
-      rawBodyText: raw.toString('binary').substring(0, 500),
-      parsedParts: parts.map(p => ({ type: p.type, name: p.name, value: p.value, filename: p.filename, size: p.data?.length })),
-      query: request.query,
-    };
-  });
-
-  // MAIN: read raw body as stream, parse manually
+  // Use request.parts() — the official v8+ API
+  // BUT we read each field's value as a string by consuming the part body
   fastify.post('/convert', async (request, reply) => {
     try {
-      // Read raw body as Node.js stream (same as /dump)
-      const raw = await readAll(request.raw);
-      const rawLen = raw.length;
+      // Iterate parts using the multipart plugin's API
+      const parts = [];
+      for await (const part of request.parts()) {
+        const p = {
+          type: part.type,
+          fieldname: part.fieldname,
+          filename: part.filename,
+          contentType: part.contentType,
+        };
 
-      if (rawLen === 0) {
-        return reply.code(422).send({
-          success: false,
-          error: 'Empty request body — raw body stream returned 0 bytes.',
-          diagnostic: {
-            hasRawBody: !!request.rawBody,
-            rawBodyLength: request.rawBody?.length || 0,
-            query: request.query,
-            headers: {
-              'content-type': request.headers['content-type'],
-              'content-length': request.headers['content-length'],
-            },
-          },
-        });
+        if (part.type === 'field') {
+          // Read field value from the part body stream
+          let body = null;
+          try {
+            // Try Node.js stream .read() first
+            if (typeof part.read === 'function') {
+              body = part.read();
+            }
+          } catch (e) {}
+          if (body === null || body === undefined) {
+            try {
+              // Try .value property
+              if (part.value !== undefined && part.value !== null) {
+                body = part.value;
+              }
+            } catch (e) {}
+          }
+          if (body === null || body === undefined) {
+            // Try consuming as a stream
+            try {
+              const chunks = [];
+              const stream = (part.file && typeof part.file === 'object') ? part.file : null;
+              if (stream && typeof stream[Symbol.asyncIterator] === 'function') {
+                for await (const chunk of stream) chunks.push(chunk);
+                body = Buffer.concat(chunks).toString().trim();
+              }
+            } catch (e) {}
+          }
+          p.value = body ? body.toString().trim() : null;
+        } else if (part.type === 'file') {
+          p.file = part.file; // keep stream reference for later
+        }
+
+        parts.push(p);
       }
 
-      const ct = request.headers['content-type'] || '';
-      const boundary = ct.match(/boundary=([^\s;]+)/)?.[1] || null;
-
-      if (!boundary) {
-        return reply.code(400).send({ success: false, error: 'Not multipart: missing boundary.' });
-      }
-
-      const parts = parseRawMultipart(raw, boundary);
       const fields = parts.filter(p => p.type === 'field');
       const files = parts.filter(p => p.type === 'file');
 
-      // Extract tool from multipart fields
+      // Extract tool
       let tool = null;
       for (const f of fields) {
-        if (f.name === 'tool') { tool = f.value; break; }
+        if (f.fieldname === 'tool' && f.value) {
+          tool = f.value;
+          break;
+        }
       }
 
       // Fallback: query param
@@ -114,10 +95,9 @@ export async function apiRoutes(fastify) {
           success: false,
           error: 'Missing tool field.',
           diagnostic: {
-            parsedFields: fields.map(f => ({ name: f.name, value: f.value })),
+            fields: fields.map(f => ({ fieldname: f.fieldname, value: f.value })),
+            files: files.map(f => ({ fieldname: f.fieldname, filename: f.filename })),
             toolFromQuery: request.query?.tool || request.query?.tool_name,
-            fileCount: files.length,
-            rawLen,
           },
         });
       }
@@ -156,9 +136,15 @@ export async function apiRoutes(fastify) {
         const jobDir = path.join(TMP_DIR, jobId);
         await fs.ensureDir(jobDir);
 
+        const buffer = await readPartToBuffer(firstFile);
+        if (!buffer || buffer.length === 0) {
+          await fs.remove(jobDir).catch(() => {});
+          return reply.code(422).send({ success: false, error: 'Empty file.' });
+        }
+
         const ext = path.extname(firstFile.filename || 'file') || '.bin';
         const inputPath = path.join(jobDir, `input${ext}`);
-        await fs.writeFile(inputPath, firstFile.data);
+        await fs.writeFile(inputPath, buffer);
 
         const outputFile = path.join(jobDir, `output_${Date.now()}.bin`);
         const tools = await import('../tools/index.js');
@@ -189,9 +175,10 @@ export async function apiRoutes(fastify) {
       await fs.ensureDir(jobDir);
       const paths = [];
       for (let i = 0; i < files.length; i++) {
+        const buf = await readPartToBuffer(files[i]);
         const ext = path.extname(files[i].filename || 'pdf') || '.pdf';
         const p = path.join(jobDir, `input_${i}${ext}`);
-        await fs.writeFile(p, files[i].data);
+        await fs.writeFile(p, buf);
         paths.push(p);
       }
       const out = path.join(jobDir, `output_${Date.now()}.pdf`);
