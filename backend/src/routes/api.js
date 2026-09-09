@@ -39,10 +39,10 @@ const statusResponseSchema = z.object({
   createdAt: z.string(),
 });
 
-async function readFileToBuffer(file) {
-  if (!file || !file.file) return null;
+async function readPartToBuffer(part) {
+  if (!part.file) return null;
   const chunks = [];
-  for await (const chunk of file.file) {
+  for await (const chunk of part.file) {
     chunks.push(chunk);
   }
   return Buffer.concat(chunks);
@@ -51,22 +51,18 @@ async function readFileToBuffer(file) {
 export async function apiRoutes(fastify) {
   fastify.post('/convert', async (request, reply) => {
     try {
-      // v8+ multipart: use request.file() for the file part
-      const filePart = await request.file();
-      if (!filePart) {
-        return reply.code(422).send({
-          success: false,
-          error: 'Missing file in multipart upload.',
-          hint: '@fastify/multipart v8+: request.file() returns the file part. Ensure Content-Type is multipart/form-data.',
-        });
+      // Collect ALL parts via iterator (v8+ API)
+      const parts = [];
+      for await (const part of request.parts()) {
+        parts.push(part);
       }
 
-      // Tool field: in v8+, fields aren't in request.body — use request.parts() or read from raw
+      // Parse fields and files from collected parts
       let tool = null;
       let pages = null;
+      const fileParts = [];
 
-      // Try to get field values from parts iterator
-      for await (const part of request.parts()) {
+      for (const part of parts) {
         if (part.type === 'field') {
           if (part.fieldname === 'tool' && part.value) {
             tool = String(part.value);
@@ -74,6 +70,8 @@ export async function apiRoutes(fastify) {
           if (part.fieldname === 'pages' && part.value) {
             pages = String(part.value);
           }
+        } else if (part.type === 'file') {
+          fileParts.push(part);
         }
       }
 
@@ -81,16 +79,24 @@ export async function apiRoutes(fastify) {
         return reply.code(422).send({
           success: false,
           error: 'Missing tool field in multipart form.',
-          hint: 'Send tool field as multipart field alongside file. Example: curl -F "tool=image-to-pdf" -F "file=@image.png"',
+          hint: 'Send tool field as multipart field alongside file.',
+        });
+      }
+      if (fileParts.length === 0) {
+        return reply.code(422).send({
+          success: false,
+          error: 'Missing file in multipart upload.',
         });
       }
 
-      const parsed = toolSchema.safeParse({ tool, file: filePart, files: [], pages });
+      const firstFile = fileParts[0];
+
+      const parsed = toolSchema.safeParse({ tool, file: firstFile, files: fileParts, pages });
       if (!parsed.success) {
         return reply.code(422).send({ success: false, error: parsed.error.issues.map((e) => e.message).join(', ') });
       }
 
-      const { tool: finalTool, file: finalFile, pages: finalPages } = parsed.data;
+      const { tool: finalTool, file: finalFile, files: finalFiles, pages: finalPages } = parsed.data;
 
       const toolMap = {
         'pdf-to-word': 'pdfToWord',
@@ -114,9 +120,9 @@ export async function apiRoutes(fastify) {
         return reply.code(400).send({ success: false, error: `Unsupported tool: ${finalTool}` });
       }
 
-      // Handle merge-pdfs specially — needs multiple files
+      // Merge PDFs — needs multiple files
       if (finalTool === 'merge-pdfs') {
-        return handleMergePdfs(fastify, reply, finalTool, toolFn);
+        return handleMergePdfs(fastify, reply, finalTool, toolFn, fileParts);
       }
 
       // Single file tools
@@ -125,7 +131,7 @@ export async function apiRoutes(fastify) {
         const jobDir = path.join(TMP_DIR, jobId);
         await fs.ensureDir(jobDir);
 
-        const buffer = await readFileToBuffer(finalFile);
+        const buffer = await readPartToBuffer(finalFile);
         if (!buffer || buffer.length === 0) {
           await fs.remove(jobDir).catch(() => {});
           return reply.code(422).send({ success: false, error: 'Uploaded file is empty.' });
@@ -166,20 +172,10 @@ export async function apiRoutes(fastify) {
     }
   });
 
-  // Merge PDFs — receives multiple files via multipart (curl -F files[]@file1 -F files[]@file2)
-  async function handleMergePdfs(fastify, reply, finalTool, toolFn) {
+  // Merge PDFs — multiple files
+  async function handleMergePdfs(fastify, reply, finalTool, toolFn, fileParts) {
     try {
-      const files = [];
-      for await (const part of request.parts()) {
-        if (part.type === 'file') {
-          const buffer = await readFileToBuffer(part);
-          if (buffer && buffer.length > 0) {
-            files.push({ buffer, filename: part.filename || `file_${files.length}.pdf` });
-          }
-        }
-      }
-
-      if (files.length < 2) {
+      if (fileParts.length < 2) {
         return reply.code(422).send({ success: false, error: 'Merge PDFs requires at least 2 PDF files.' });
       }
 
@@ -188,9 +184,11 @@ export async function apiRoutes(fastify) {
       await fs.ensureDir(jobDir);
 
       const inputPaths = [];
-      for (let i = 0; i < files.length; i++) {
-        const inputPath = path.join(jobDir, `input_${i}${path.extname(files[i].filename)}`);
-        await fs.writeFile(inputPath, files[i].buffer);
+      for (let i = 0; i < fileParts.length; i++) {
+        const buffer = await readPartToBuffer(fileParts[i]);
+        const ext = path.extname(fileParts[i].filename || 'pdf') || '.pdf';
+        const inputPath = path.join(jobDir, `input_${i}${ext}`);
+        await fs.writeFile(inputPath, buffer);
         inputPaths.push(inputPath);
       }
 
@@ -225,7 +223,7 @@ export async function apiRoutes(fastify) {
 
       try {
         const entries = await fs.readdir(jobDir);
-        const output = entries.find((n) => n.startsWith('output_'));
+        const output = entries.find((n) => n.startswith('output_'));
         if (!output) throw new Error('No output');
         const response = {
           jobId,
