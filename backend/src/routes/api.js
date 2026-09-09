@@ -51,33 +51,24 @@ async function getFileBuffer(file) {
 export async function apiRoutes(fastify) {
   fastify.post('/convert', async (request, reply) => {
     try {
-      const rawBody = request.body || {};
-      fastify.log.info(
-        {
-          bodyKeys: Object.keys(rawBody),
-          tool: rawBody.tool,
-          fileKeys: rawBody.file ? Object.keys(rawBody.file) : null,
-        },
-        'convert raw body'
-      );
+      // v8+ multipart: use async iterator instead of request.body
+      const parts = await request.parts();
+      let tool = null, file = null, files = [], pages = null;
 
-      // Fastify multipart may expose fields differently depending on client/version
-      const extractTool = (body) => {
-        if (!body) return null;
-        if (typeof body.tool === 'string') return body.tool;
-        if (body.tool && typeof body.tool === 'object' && typeof body.tool.value === 'string') return body.tool.value;
-        if (typeof body.field === 'string') return body.field;
-        if (typeof body.name === 'string') return body.name;
-        return null;
-      };
-
-      const tool = extractTool(rawBody);
-      const file = rawBody.file;
-      const files = rawBody.files;
-      const pages = rawBody.pages;
+      for await (const part of parts) {
+        if (part.fieldName === 'tool') {
+          tool = await part.text();
+        } else if (part.fieldName === 'file') {
+          file = part;
+        } else if (part.fieldName === 'files') {
+          files.push(part);
+        } else if (part.fieldName === 'pages') {
+          pages = await part.text();
+        }
+      }
 
       if (!tool) {
-        fastify.log.warn({ rawBody }, 'convert tool field missing');
+        fastify.log.warn({ hasParts: !!parts }, 'convert tool field missing');
         return reply.code(422).send({ success: false, error: 'Missing tool field in multipart form.' });
       }
 
@@ -127,7 +118,7 @@ export async function apiRoutes(fastify) {
         const outputFile = path.join(jobDir, `output_${Date.now()}.bin`);
 
         if (finalFile) {
-          const buffer = getFileBuffer(finalFile);
+          const buffer = await getFileBuffer(finalFile);
           if (!buffer) throw new Error('Uploaded file is empty');
           const ext = path.extname(finalFile.filename || 'file') || '.bin';
           const inputPath = path.join(jobDir, `input${ext}`);
@@ -137,7 +128,7 @@ export async function apiRoutes(fastify) {
 
         if (finalFiles && Array.isArray(finalFiles)) {
           for (const f of finalFiles) {
-            const buffer = getFileBuffer(f);
+            const buffer = await getFileBuffer(f);
             if (!buffer) continue;
             const ext = path.extname(f.filename || 'file') || '.bin';
             const inputPath = path.join(jobDir, `input_${inputFiles.length}${ext}`);
