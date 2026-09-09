@@ -49,39 +49,42 @@ async function readPartToBuffer(part) {
 }
 
 export async function apiRoutes(fastify) {
+  // DEBUG: echo endpoint to see what the server receives
+  fastify.get('/echo', async (request, reply) => {
+    return {
+      query: request.query,
+      headers: request.headers,
+      method: request.method,
+      url: request.url,
+      hasBody: !!request.body,
+      bodyType: typeof request.body,
+      body: request.body,
+    };
+  });
+
   fastify.post('/convert', async (request, reply) => {
     try {
-      // Get tool from query params (simpler than multipart field parsing)
+      // Check ALL sources of tool
       const toolFromQuery = request.query?.tool || request.query?.tool_name;
-      
-      // Collect file parts from multipart
+      const toolFromBody = request.body?.tool;
+      const tool = toolFromQuery || toolFromBody;
+
+      // Collect file parts
       const fileParts = [];
       for await (const part of request.parts()) {
-        if (part.type === 'file') {
-          fileParts.push(part);
-        }
-      }
-
-      // Tool from query OR from multipart field
-      let tool = toolFromQuery;
-      
-      // Also scan parts for a 'tool' field (for backward compat / frontend FormData)
-      if (!tool) {
-        for (const part of fileParts) {
-          // already collected
-        }
-      }
-      
-      // Re-scan ALL parts for tool field (in case it's a field, not query)
-      if (!tool) {
-        // We already consumed the iterator — can't re-scan
-        // Fall back to checking if we missed it
+        fileParts.push(part);
       }
 
       if (!tool) {
         return reply.code(422).send({
           success: false,
-          error: 'Missing tool field. Send as ?tool=image-to-pdf query param or as multipart field.',
+          error: 'Missing tool field. Send as ?tool=image-to-pdf in URL.',
+          debug: {
+            toolFromQuery,
+            toolFromBody,
+            filePartsCount: fileParts.length,
+            queryKeys: Object.keys(request.query || {}),
+          },
         });
       }
 
@@ -123,12 +126,10 @@ export async function apiRoutes(fastify) {
         return reply.code(400).send({ success: false, error: `Unsupported tool: ${finalTool}` });
       }
 
-      // Merge PDFs — needs multiple files
       if (finalTool === 'merge-pdfs') {
         return handleMergePdfs(fastify, reply, finalTool, toolFn, fileParts);
       }
 
-      // Single file tools
       try {
         const jobId = crypto.randomUUID();
         const jobDir = path.join(TMP_DIR, jobId);
@@ -175,7 +176,6 @@ export async function apiRoutes(fastify) {
     }
   });
 
-  // Merge PDFs — multiple files
   async function handleMergePdfs(fastify, reply, finalTool, toolFn, fileParts) {
     try {
       if (fileParts.length < 2) {
