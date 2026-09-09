@@ -1,6 +1,8 @@
 'use client';
 
 import { useState, useEffect, createContext, useContext } from 'react';
+import { authOptions } from "@/app/api/auth/[...nextauth]/route";
+import type { Session, User } from "next-auth";
 
 interface Account {
   email: string;
@@ -76,3 +78,7 @@ export function useAuth() {
   if (!ctx) throw new Error('useAuth must be used within AuthProvider');
   return ctx;
 }
+
+// Re-export server-side auth config so both server and client code can import from one place
+export { authOptions };
+export type { Session, User };
