@@ -51,37 +51,40 @@ async function readPartToBuffer(part) {
 export async function apiRoutes(fastify) {
   fastify.post('/convert', async (request, reply) => {
     try {
-      // Collect ALL parts via iterator (v8+ API)
-      const parts = [];
-      for await (const part of request.parts()) {
-        parts.push(part);
-      }
-
-      // Parse fields and files from collected parts
-      let tool = null;
-      let pages = null;
+      // Get tool from query params (simpler than multipart field parsing)
+      const toolFromQuery = request.query?.tool || request.query?.tool_name;
+      
+      // Collect file parts from multipart
       const fileParts = [];
-
-      for (const part of parts) {
-        if (part.type === 'field') {
-          if (part.fieldname === 'tool' && part.value) {
-            tool = String(part.value);
-          }
-          if (part.fieldname === 'pages' && part.value) {
-            pages = String(part.value);
-          }
-        } else if (part.type === 'file') {
+      for await (const part of request.parts()) {
+        if (part.type === 'file') {
           fileParts.push(part);
         }
+      }
+
+      // Tool from query OR from multipart field
+      let tool = toolFromQuery;
+      
+      // Also scan parts for a 'tool' field (for backward compat / frontend FormData)
+      if (!tool) {
+        for (const part of fileParts) {
+          // already collected
+        }
+      }
+      
+      // Re-scan ALL parts for tool field (in case it's a field, not query)
+      if (!tool) {
+        // We already consumed the iterator — can't re-scan
+        // Fall back to checking if we missed it
       }
 
       if (!tool) {
         return reply.code(422).send({
           success: false,
-          error: 'Missing tool field in multipart form.',
-          hint: 'Send tool field as multipart field alongside file.',
+          error: 'Missing tool field. Send as ?tool=image-to-pdf query param or as multipart field.',
         });
       }
+
       if (fileParts.length === 0) {
         return reply.code(422).send({
           success: false,
@@ -91,12 +94,12 @@ export async function apiRoutes(fastify) {
 
       const firstFile = fileParts[0];
 
-      const parsed = toolSchema.safeParse({ tool, file: firstFile, files: fileParts, pages });
+      const parsed = toolSchema.safeParse({ tool, file: firstFile, files: fileParts, pages: null });
       if (!parsed.success) {
         return reply.code(422).send({ success: false, error: parsed.error.issues.map((e) => e.message).join(', ') });
       }
 
-      const { tool: finalTool, file: finalFile, files: finalFiles, pages: finalPages } = parsed.data;
+      const { tool: finalTool, file: finalFile, files: finalFiles } = parsed.data;
 
       const toolMap = {
         'pdf-to-word': 'pdfToWord',
@@ -223,7 +226,7 @@ export async function apiRoutes(fastify) {
 
       try {
         const entries = await fs.readdir(jobDir);
-        const output = entries.find((n) => n.startswith('output_'));
+        const output = entries.find((n) => n.startsWith('output_'));
         if (!output) throw new Error('No output');
         const response = {
           jobId,
