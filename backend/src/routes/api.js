@@ -51,11 +51,23 @@ async function getFileBuffer(file) {
 export async function apiRoutes(fastify) {
   fastify.post('/convert', async (request, reply) => {
     try {
-      // v8+ multipart: use async iterator with part.type + part.fieldname/part.value
-      const parts = await request.parts();
-      let tool = null, file = null, files = [], pages = null;
+      fastify.log.info({ hasParts: typeof request.parts === 'function' }, 'multipart check');
 
-      for await (const part of parts) {
+      // Diagnostic: collect all parts first
+      const allParts = [];
+      for await (const part of request.parts()) {
+        allParts.push({
+          type: part.type,
+          fieldname: part.fieldname || null,
+          filename: part.filename || null,
+          value: part.type === 'field' ? part.value : null,
+        });
+      }
+      fastify.log.info({ partsCount: allParts.length, parts: allParts }, 'all multipart parts');
+
+      // Now parse
+      let tool = null, file = null, files = [], pages = null;
+      for (const part of allParts) {
         if (part.type === 'field') {
           if (part.fieldname === 'tool') tool = part.value;
           else if (part.fieldname === 'pages') pages = part.value;
@@ -65,14 +77,15 @@ export async function apiRoutes(fastify) {
         }
       }
 
+      fastify.log.info({ tool, hasFile: !!file, fileCount: files.length }, 'parsed values');
+
       if (!tool) {
-        fastify.log.warn({ hasParts: !!parts }, 'convert tool field missing');
         return reply.code(422).send({ success: false, error: 'Missing tool field in multipart form.' });
       }
 
       const parsed = toolSchema.safeParse({ tool, file, files, pages });
       if (!parsed.success) {
-        fastify.log.info({ issues: parsed.error.issues }, 'convert validation failed');
+        fastify.log.info({ issues: parsed.error.issues }, 'validation failed');
         return reply.code(422).send({ success: false, error: parsed.error.issues.map((e) => e.message).join(', ') });
       }
 
