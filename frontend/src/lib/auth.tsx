@@ -1,7 +1,6 @@
 'use client';
 
 import { useState, useEffect, createContext, useContext } from 'react';
-import { authOptions, type Session, type User } from './auth.config';
 
 interface Account {
   email: string;
@@ -77,7 +76,3 @@ export function useAuth() {
   if (!ctx) throw new Error('useAuth must be used within AuthProvider');
   return ctx;
 }
-
-// Re-export server-side auth config so both server and client code can import from one place
-export { authOptions };
-export type { Session, User };
