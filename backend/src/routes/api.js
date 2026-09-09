@@ -67,7 +67,7 @@ export async function apiRoutes(fastify) {
   // MAIN: read raw body as stream, parse manually
   fastify.post('/convert', async (request, reply) => {
     try {
-      // Read raw body as stream (this is what Fastify provides)
+      // Read raw body as Node.js stream (same as /dump)
       const raw = await readAll(request.raw);
       const rawLen = raw.length;
 
