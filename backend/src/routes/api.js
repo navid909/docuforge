@@ -7,7 +7,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const BASE_DIR = path.resolve(__dirname, '..', '..');
 const TMP_DIR = path.join(BASE_DIR, 'tmp');
 
-const DEPLOYED_VERSION = "v1-final-tools-fixed";
+const DEPLOYED_VERSION = "v1-final-all-tools-working";
 
 // ─── Raw multipart parser ───
 function parseRawMultipart(rawBody, boundary) {
