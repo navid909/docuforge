@@ -1,11 +1,10 @@
 import fs from 'fs/promises';
 import path from 'path';
 import { PDFDocument, StandardFonts, rgb } from 'pdf-lib';
-import sharp from 'sharp';
 
 export async function pptxToPdf(inputPath, outputPath) {
-  const { Presentation } = await import('pptxgenjs');
-  const pptx = new Presentation();
+  const PptxGenJS = (await import('pptxgenjs')).default;
+  const pptx = new PptxGenJS();
   await pptx.readFile(inputPath);
 
   const pdfDoc = await PDFDocument.create();

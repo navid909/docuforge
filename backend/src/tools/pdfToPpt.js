@@ -1,19 +1,19 @@
 import fs from 'fs/promises';
 import path from 'path';
 import { PDFDocument } from 'pdf-lib';
-import { Presentation } from 'pptxgenjs';
+import PptxGenJS from 'pptxgenjs';
 
 export async function pdfToPpt(inputPath, outputPath) {
   const pdfBuf = await fs.readFile(inputPath);
   const pdfDoc = await PDFDocument.load(pdfBuf);
   const pages = pdfDoc.getPages();
 
-  const pptx = new Presentation();
+  const pptx = new PptxGenJS();
 
   for (const page of pages) {
-    const text = page.node.Text?.Chunks?.map(c => c.str)?.join(' ') || '';
-    const slideId = pptx.addSlide();
-    slideId.addText(text.slice(0, 500), {
+    const text = page.node?.Text?.Chunks?.map(c => c.str)?.join(' ') || '';
+    const slide = pptx.addSlide();
+    slide.addText(text.slice(0, 500), {
       x: 0.5,
       y: 0.5,
       w: 9,
