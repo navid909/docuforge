@@ -154,13 +154,33 @@ export async function apiRoutes(fastify) {
 
       const firstFile = files[0];
 
-      // HARDcoded test: bypass all logic and pass string directly to Zod
-      const hardcodedTest = toolSchema.safeParse({ tool: 'image-to-pdf-hardcoded', file: null, files: [], pages: null });
-      if (!hardcodedTest.success) {
+      // HARDcoded test: isolate which part of Zod schema is broken
+      const test1 = toolSchema.safeParse({ tool: 'test123', file: null, files: [], pages: null });
+      const test2 = toolSchema.safeParse({ tool: 'test123' });
+      const test3 = z.object({ tool: z.string().min(1) }).safeParse({ tool: 'test123' });
+      const test4 = z.string().min(1).safeParse('test123');
+      const test5 = toolSchema.safeParse({ tool: '', file: null, files: [], pages: null });
+      const test6 = toolSchema.safeParse({ tool: null, file: null, files: [], pages: null });
+      
+      if (!test1.success) {
         return reply.code(500).send({ 
           success: false, 
-          error: 'Zod itself is broken — hardcoded string failed: ' + hardcodedTest.error.issues.map(e => e.message).join(', '),
+          error: 'Zod test1 FAILED (full schema with all fields): ' + test1.error.issues.map(e => e.message).join(', '),
           version: DEPLOYED_VERSION,
+          zodTests: {
+            test1: { success: test1.success, issues: test1.error.issues.map(i => i.message) },
+            test2: { success: test2.success, issues: test2.error.issues.map(i => i.message) },
+            test3: { success: test3.success, issues: test3.error.issues.map(i => i.message) },
+            test4: { success: test4.success, issues: test4.error.issues.map(i => i.message) },
+            test5_empty_tool: { success: test5.success, issues: test5.error.issues.map(i => i.message) },
+            test6_null_tool: { success: test6.success, issues: test6.error.issues.map(i => i.message) },
+          },
+          zodSchemaDef: {
+            toolValidator: toolSchema.shape.tool?.toString?.() || 'unknown',
+            fileValidator: toolSchema.shape.file?.toString?.() || 'unknown',
+            filesValidator: toolSchema.shape.files?.toString?.() || 'unknown',
+            pagesValidator: toolSchema.shape.pages?.toString?.() || 'unknown',
+          },
         });
       }
 
