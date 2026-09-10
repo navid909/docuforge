@@ -93,11 +93,12 @@ export async function apiRoutes(fastify) {
           success: false,
           error: 'Empty request body — raw body stream returned 0 bytes.',
           version: DEPLOYED_VERSION,
-          diagnostic: {
+          debug: {
             rawLen,
             contentLength: request.headers['content-length'],
             contentType: request.headers['content-type'],
             query: request.query,
+            queryTool: request.query?.tool,
           },
         });
       }
@@ -105,8 +106,9 @@ export async function apiRoutes(fastify) {
       const ct = request.headers['content-type'] || '';
       const boundary = ct.match(/boundary=([^\s;]+)/)?.[1] || null;
 
+      // DEBUG: always return query info
       if (!boundary) {
-        return reply.code(400).send({ success: false, error: 'Not multipart: missing boundary.', version: DEPLOYED_VERSION });
+        return reply.code(400).send({ success: false, error: 'Not multipart: missing boundary.', version: DEPLOYED_VERSION, debug: { query: request.query, queryTool: request.query?.tool } });
       }
 
       const parts = parseRawMultipart(raw, boundary);
@@ -126,11 +128,12 @@ export async function apiRoutes(fastify) {
           success: false,
           error: 'Missing tool field.',
           version: DEPLOYED_VERSION,
-          diagnostic: {
+          debug: {
             fields: fields.map(f => ({ name: f.name, value: f.value })),
             toolFromQuery: request.query?.tool || request.query?.tool_name,
             fileCount: files.length,
             rawLen,
+            rawFirst100: raw.toString('binary').substring(0, 100),
           },
         });
       }
