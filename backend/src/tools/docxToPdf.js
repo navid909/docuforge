@@ -5,12 +5,12 @@ import { createRequire } from 'module';
 const require = createRequire(import.meta.url);
 
 const mammoth = require('mammoth');
+const { PDFDocument, StandardFonts } = require('pdf-lib');
 
 export async function docxToPdf(inputPath, outputPath) {
   const result = await mammoth.extractRawText({ path: inputPath });
   const text = result.value;
 
-  const { PDFDocument, StandardFonts } = await import('pdf-lib');
   const pdfDoc = await PDFDocument.create();
   const page = pdfDoc.addPage([612, 792]);
   const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
@@ -22,18 +22,18 @@ export async function docxToPdf(inputPath, outputPath) {
   for (let i = 0; i < lines.length && yPos > 50; i++) {
     const line = lines[i]?.trim();
     if (line) {
-      const displayLine = line.length > 100 ? line.slice(0, 100) : line;
-      page.drawText(displayLine, {
+      page.drawText(line.length > 100 ? line.slice(0, 100) : line, {
         x: 72,
         y: yPos,
         size: 11,
         font,
       });
+      yPos -= lineHeight;
+    } else {
+      yPos -= lineHeight;
     }
-    yPos -= lineHeight;
   }
 
-  const pdfBytes = await pdfDoc.save();
-  await fsPromises.writeFile(outputPath, pdfBytes);
+  await pdfDoc.save().then(pdfBytes => fsPromises.writeFile(outputPath, pdfBytes));
   return outputPath;
 }
