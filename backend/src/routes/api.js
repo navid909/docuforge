@@ -211,7 +211,7 @@ export async function apiRoutes(fastify) {
 
       const outputFile = path.join(jobDir, `output_${Date.now()}.pdf`);
       const toolMod = tools;
-      const result = await toolMod[toolFn](inputPaths, outputFile);
+      const result = await toolMod[fn](inputPaths, outputFile);
       const outPath = Array.isArray(result) ? result[0] : result;
       const finalName = path.basename(outPath);
 

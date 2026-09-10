@@ -7,7 +7,6 @@ export async function pdfToWord(inputPath, outputPath) {
   const pdfDoc = await PDFDocument.load(dataBuffer);
   const pages = pdfDoc.getPages();
 
-  // Extract text from each page using page.getText()
   const allText = [];
   for (const page of pages) {
     try {

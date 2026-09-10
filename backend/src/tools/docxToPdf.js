@@ -5,6 +5,7 @@ import { createRequire } from 'module';
 const require = createRequire(import.meta.url);
 
 const mammoth = require('mammoth');
+const { Document: DocxDoc, Packer, Paragraph, TextRun } = require('docx');
 const { PDFDocument, StandardFonts } = require('pdf-lib');
 
 export async function docxToPdf(inputPath, outputPath) {
@@ -24,10 +25,7 @@ export async function docxToPdf(inputPath, outputPath) {
     const line = lines[i]?.trim() || '';
     if (line) {
       page.drawText(line.length > 100 ? line.slice(0, 100) : line, {
-        x: 72,
-        y: yPos,
-        size: 11,
-        font,
+        x: 72, y: yPos, size: 11, font,
       });
     }
     yPos -= lineHeight;
