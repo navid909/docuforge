@@ -198,12 +198,18 @@ export async function apiRoutes(fastify) {
       if (!parsed.success) {
         return reply.code(422).send({ 
           success: false, 
-          error: parsed.error.issues.map(e => e.message).join(', '), 
+          error: 'Zod validation failed: ' + parsed.error.issues.map(e => e.message).join(', '), 
           version: DEPLOYED_VERSION,
           zodFieldDebug,
           preZodDebug,
         });
       }
+      
+      // DEBUG: confirm we got past Zod
+      const afterZodDebug = {
+        finalTool: parsed.data.tool,
+        toolType: typeof parsed.data.tool,
+      };
 
       const { tool: finalTool } = parsed.data;
 
