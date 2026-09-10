@@ -3,7 +3,13 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import crypto from 'crypto';
 import { z } from 'zod';
-import { readAll } from 'node:stream/consumers';
+
+// readAll polyfill for Node.js versions that don't have it in node:stream/consumers
+async function readAll(stream) {
+  const chunks = [];
+  for await (const chunk of stream) chunks.push(chunk);
+  return Buffer.concat(chunks);
+}
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const BASE_DIR = path.resolve(__dirname, '..', '..');
