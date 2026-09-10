@@ -2,29 +2,14 @@ import fs from 'fs/promises';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import crypto from 'crypto';
-import { z } from 'zod';
-
-// readAll polyfill for Node.js versions that don't have it in node:stream/consumers
-async function readAll(stream) {
-  const chunks = [];
-  for await (const chunk of stream) chunks.push(chunk);
-  return Buffer.concat(chunks);
-}
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const BASE_DIR = path.resolve(__dirname, '..', '..');
 const TMP_DIR = path.join(BASE_DIR, 'tmp');
 
-// ─── VISIBLE MARKER: this exact string proves this version is deployed ───
-const DEPLOYED_VERSION = 'RAW-BODY-FIX-ddff1a0';
+const DEPLOYED_VERSION = 'MANUAL-VALIDATION-READBODY-v1';
 
-const toolSchema = z.object({ tool: z.string().min(1), file: z.any().optional(), files: z.any().optional(), pages: z.string().optional() });
-const statusParamsSchema = z.object({ jobId: z.string().min(1) });
-const downloadParamsSchema = z.object({ jobId: z.string().min(1) });
-const convertResponseSchema = z.object({ jobId: z.string(), status: z.string(), tool: z.string(), createdAt: z.string() });
-const statusResponseSchema = z.object({ jobId: z.string(), status: z.string(), progress: z.number(), downloadUrl: z.string().optional(), error: z.string().optional(), createdAt: z.string() });
-
-// Parse raw multipart body
+// ─── Raw multipart parser ───
 function parseRawMultipart(rawBody, boundary) {
   const str = rawBody.toString('binary');
   const parts = [];
@@ -50,19 +35,60 @@ function parseRawMultipart(rawBody, boundary) {
   return parts;
 }
 
-async function readPartToBuffer(part) {
+async function readAll(stream) {
+  const chunks = [];
+  for await (const chunk of stream) chunks.push(chunk);
+  return Buffer.concat(chunks);
+}
+
+async function readPartToFile(part) {
   if (!part.file) return null;
   const chunks = [];
   for await (const chunk of part.file) chunks.push(chunk);
   return Buffer.concat(chunks);
 }
 
+// ─── Manual validation (bypass Zod) ───
+function validateConvertInput(tool, file, files, pages) {
+  const errors = [];
+
+  if (!tool || typeof tool !== 'string' || tool.trim().length === 0) {
+    errors.push('tool must be a non-empty string');
+  }
+
+  if (!file && files.length === 0) {
+    errors.push('At least one file is required');
+  }
+
+  return {
+    valid: errors.length === 0,
+    errors,
+    data: { tool: tool?.trim() || null, file, files, pages: pages || null },
+  };
+}
+
+// ─── Tool dispatch map ───
+const TOOL_MAP = {
+  'pdf-to-word': 'pdfToWord',
+  'image-to-pdf': 'imageToPdf',
+  'compress-pdf': 'compressPdf',
+  'ocr-image': 'ocrImage',
+  'pdf-to-excel': 'pdfToExcel',
+  'pdf-to-ppt': 'pdfToPpt',
+  'pdf-to-images': 'pdfToImages',
+  'docx-to-pdf': 'docxToPdf',
+  'xlsx-to-pdf': 'xlsxToPdf',
+  'pptx-to-pdf': 'pptxToPdf',
+  'merge-pdfs': 'mergePdfs',
+  'split-pdf': 'splitPdf',
+  'protect-pdf': 'protectPdf',
+  'pdf-to-image': 'pdfToImage',
+};
+
 export async function apiRoutes(fastify) {
 
-  // VISIBLE MARKER endpoint
-  fastify.get('/version', async () => {
-    return { version: DEPLOYED_VERSION, deployedAt: new Date().toISOString() };
-  });
+  // Health / version marker
+  fastify.get('/version', async () => ({ version: DEPLOYED_VERSION, deployedAt: new Date().toISOString() }));
 
   // Debug: dump raw body
   fastify.post('/dump', async (request, reply) => {
@@ -81,145 +107,78 @@ export async function apiRoutes(fastify) {
     };
   });
 
-  // MAIN: read raw body as stream, parse manually
+  // ─── MAIN CONVERT ENDPOINT ───
   fastify.post('/convert', async (request, reply) => {
     try {
-      // DEBUG: dump request state at handler entry
-      const entryDebug = {
-        url: request.url,
-        method: request.method,
-        query: request.query,
-        headers: {
-          'content-type': request.headers['content-type'],
-          'content-length': request.headers['content-length'],
-        },
-      };
-
-      // READ RAW BODY (same pattern as /dump)
+      // 1. Read raw body
       const raw = await readAll(request.raw);
-      const rawLen = raw.length;
-
-      if (rawLen === 0) {
-        return reply.code(422).send({
-          success: false,
-          error: 'Empty request body.',
-          version: DEPLOYED_VERSION,
-          entryDebug,
-        });
+      if (raw.length === 0) {
+        return reply.code(400).send({ success: false, error: 'Empty request body.', version: DEPLOYED_VERSION });
       }
 
+      // 2. Parse multipart
       const ct = request.headers['content-type'] || '';
       const boundary = ct.match(/boundary=([^\s;]+)/)?.[1] || null;
-
       if (!boundary) {
-        return reply.code(400).send({ success: false, error: 'Not multipart: missing boundary.', version: DEPLOYED_VERSION, entryDebug });
+        return reply.code(400).send({ success: false, error: 'Not multipart: missing boundary.', version: DEPLOYED_VERSION });
       }
 
       const parts = parseRawMultipart(raw, boundary);
       const fields = parts.filter(p => p.type === 'field');
-      const files = parts.filter(p => p.type === 'file');
+      const fileParts = parts.filter(p => p.type === 'file');
 
-      // Extract tool from multipart fields
+      // 3. Extract tool (multipart field OR query param)
       let tool = null;
       for (const f of fields) {
         if (f.name === 'tool') { tool = f.value; break; }
       }
-      // Fallback: query param
       if (!tool) tool = request.query?.tool || request.query?.tool_name || null;
 
-      // DEBUG: show what we have before Zod
-      const preZodDebug = {
-        tool,
-        toolType: typeof tool,
-        toolValue: tool,
-        fields: fields.map(f => ({ name: f.name, value: f.value })),
-        toolFromQuery: request.query?.tool || request.query?.tool_name,
-        fileCount: files.length,
-        rawLen,
-        rawFirst200: raw.toString('binary').substring(0, 200),
-      };
-
-      if (!tool) {
+      // 4. Validate
+      const validation = validateConvertInput(tool, fileParts[0] || null, fileParts, null);
+      if (!validation.valid) {
         return reply.code(422).send({
           success: false,
-          error: 'Missing tool field.',
+          error: validation.errors.join(', '),
           version: DEPLOYED_VERSION,
-          preZodDebug,
+          debug: {
+            tool,
+            toolType: typeof tool,
+            fields: fields.map(f => ({ name: f.name, value: f.value })),
+            toolFromQuery: request.query?.tool || request.query?.tool_name,
+            fileCount: fileParts.length,
+          },
         });
       }
 
-      if (files.length === 0) {
-        return reply.code(422).send({ success: false, error: 'Missing file in upload.', version: DEPLOYED_VERSION, preZodDebug });
+      const { tool: finalTool, file: firstFile, files: allFiles } = validation.data;
+
+      // 5. Dispatch to tool function
+      const toolFn = TOOL_MAP[finalTool];
+      if (!toolFn) {
+        return reply.code(400).send({ success: false, error: `Unsupported tool: ${finalTool}`, version: DEPLOYED_VERSION });
       }
 
-      const firstFile = files[0];
-
-      // HARDcoded test: bypass all logic and pass string directly to Zod
-      const hardcodedTest = toolSchema.safeParse({ tool: 'image-to-pdf-hardcoded', file: null, files: [], pages: null });
-      if (!hardcodedTest.success) {
-        return reply.code(500).send({ 
-          success: false, 
-          error: 'Zod itself is broken — hardcoded string failed: ' + hardcodedTest.error.issues.map(e => e.message).join(', '),
-          version: DEPLOYED_VERSION,
-        });
-      }
-
-      // DEBUG: show what Zod receives — explicit every field
-      const zodInput = { tool, file: firstFile, files, pages: null };
-      
-      const zodFieldDebug = {
-        tool: { value: zodInput.tool, type: typeof zodInput.tool, isNull: zodInput.tool === null, isUndefined: zodInput.tool === undefined },
-        file: { present: !!zodInput.file, hasFilename: zodInput.file?.filename || null, hasData: !!zodInput.file?.data, dataLength: zodInput.file?.data?.length || 0 },
-        files: { count: zodInput.files.length, firstHasData: zodInput.files[0]?.data ? true : false },
-        pages: zodInput.pages,
-      };
-
-      const parsed = toolSchema.safeParse(zodInput);
-      if (!parsed.success) {
-        const issueDetails = parsed.error.issues.map(e => ({ 
-          code: e.code, 
-          message: e.message, 
-          path: e.path, 
-          expected: e.expected, 
-          received: e.received 
-        }));
-        return reply.code(422).send({ 
-          success: false, 
-          error: parsed.error.issues.map(e => e.message).join(', '), 
-          version: DEPLOYED_VERSION,
-          zodFieldDebug,
-          preZodDebug,
-          issueDetails,
-        });
-      }
-
-      const { tool: finalTool } = parsed.data;
-
-      const toolMap = {
-        'pdf-to-word': 'pdfToWord', 'image-to-pdf': 'imageToPdf', 'compress-pdf': 'compressPdf',
-        'ocr-image': 'ocrImage', 'pdf-to-excel': 'pdfToExcel', 'pdf-to-ppt': 'pdfToPpt',
-        'pdf-to-images': 'pdfToImages', 'docx-to-pdf': 'docxToPdf', 'xlsx-to-pdf': 'xlsxToPdf',
-        'pptx-to-pdf': 'pptxToPdf', 'merge-pdfs': 'mergePdfs', 'split-pdf': 'splitPdf',
-        'protect-pdf': 'protectPdf', 'pdf-to-image': 'pdfToImage',
-      };
-
-      const toolFn = toolMap[finalTool];
-      if (!toolFn) return reply.code(400).send({ success: false, error: `Unsupported tool: ${finalTool}`, version: DEPLOYED_VERSION });
-
+      // Merge PDFs needs multiple files
       if (finalTool === 'merge-pdfs') {
-        if (files.length < 2) return reply.code(422).send({ success: false, error: 'Merge needs 2+ files.', version: DEPLOYED_VERSION });
-        return handleMerge(fastify, reply, finalTool, toolFn, files);
+        if (allFiles.length < 2) {
+          return reply.code(422).send({ success: false, error: 'Merge PDFs requires at least 2 files.', version: DEPLOYED_VERSION });
+        }
+        return handleMerge(fastify, reply, finalTool, toolFn, allFiles);
       }
 
+      // 6. Process single file
       try {
         const jobId = crypto.randomUUID();
         const jobDir = path.join(TMP_DIR, jobId);
         await fs.ensureDir(jobDir);
 
+        // Write uploaded file
         const ext = path.extname(firstFile.filename || 'file') || '.bin';
         const inputPath = path.join(jobDir, `input${ext}`);
         await fs.writeFile(inputPath, firstFile.data);
 
+        // Process
         const outputFile = path.join(jobDir, `output_${Date.now()}.bin`);
         const tools = await import('../tools/index.js');
         const result = await tools[toolFn](inputPath, outputFile);
@@ -227,18 +186,23 @@ export async function apiRoutes(fastify) {
         const outputPath = Array.isArray(result) ? result[0] : result;
         const finalName = path.basename(outputPath);
 
-        return convertResponseSchema.parse({
-          jobId, status: 'completed', tool: finalTool, createdAt: new Date().toISOString(),
+        return {
+          jobId,
+          status: 'completed',
+          tool: finalTool,
+          createdAt: new Date().toISOString(),
           download: { filename: finalName, url: `/download/${jobId}/${finalName}` },
-        });
+        };
       } catch (error) {
-        fastify.log.error({ error, tool: finalTool }, 'Tool failed');
+        fastify.log.error({ error, tool: finalTool }, 'Tool processing failed');
         throw error;
       }
     } catch (error) {
-      if (error instanceof z.ZodError) return reply.code(422).send({ success: false, error: error.errors.map(e => e.message).join(', '), version: DEPLOYED_VERSION });
-      fastify.log.error(error);
-      return reply.code(500).send({ success: false, error: 'Processing failed.', version: DEPLOYED_VERSION });
+      fastify.log.error({ error, message: error.message, stack: error.stack }, 'Unhandled /convert error');
+      if (error?.code === 'ZOD_ERROR') {
+        return reply.code(422).send({ success: false, error: error.message, version: DEPLOYED_VERSION });
+      }
+      return reply.code(500).send({ success: false, error: error.message || 'Processing failed.', version: DEPLOYED_VERSION });
     }
   });
 
@@ -247,43 +211,64 @@ export async function apiRoutes(fastify) {
       const jobId = crypto.randomUUID();
       const jobDir = path.join(TMP_DIR, jobId);
       await fs.ensureDir(jobDir);
-      const paths = [];
+
+      const inputPaths = [];
       for (let i = 0; i < files.length; i++) {
         const ext = path.extname(files[i].filename || 'pdf') || '.pdf';
         const p = path.join(jobDir, `input_${i}${ext}`);
         await fs.writeFile(p, files[i].data);
-        paths.push(p);
+        inputPaths.push(p);
       }
-      const out = path.join(jobDir, `output_${Date.now()}.pdf`);
+
+      const outputFile = path.join(jobDir, `output_${Date.now()}.pdf`);
       const tools = await import('../tools/index.js');
-      const result = await fn(paths, out);
+      const result = await fn(inputPaths, outputFile);
       const outPath = Array.isArray(result) ? result[0] : result;
-      return convertResponseSchema.parse({ jobId, status: 'completed', tool, createdAt: new Date().toISOString(), download: { filename: path.basename(outPath), url: `/download/${jobId}/${path.basename(outPath)}` } });
-    } catch (error) { fastify.log.error({ error }, 'Merge failed'); throw error; }
+      const finalName = path.basename(outPath);
+
+      return {
+        jobId, status: 'completed', tool,
+        createdAt: new Date().toISOString(),
+        download: { filename: finalName, url: `/download/${jobId}/${finalName}` },
+      };
+    } catch (error) {
+      fastify.log.error({ error }, 'Merge failed');
+      throw error;
+    }
   }
 
+  // ─── Status endpoint ───
   fastify.get('/status/:jobId', async (request, reply) => {
+    const jobId = request.params.jobId;
+    const jobDir = path.join(TMP_DIR, jobId);
     try {
-      const jobId = statusParamsSchema.parse(request.params).jobId;
-      const jobDir = path.join(TMP_DIR, jobId);
-      try {
-        const entries = await fs.readdir(jobDir);
-        const out = entries.find(n => n.startsWith('output_'));
-        if (!out) throw new Error('no output');
-        return statusResponseSchema.parse({ jobId, status: 'completed', progress: 100, downloadUrl: `/download/${jobId}/${out}`, error: null, createdAt: new Date().toISOString() });
-      } catch { return statusResponseSchema.parse({ jobId, status: 'failed', progress: 0, downloadUrl: undefined, error: 'Not found.', createdAt: new Date().toISOString() }); }
-    } catch (e) { if (e instanceof z.ZodError) return reply.code(400).send({ success: false, error: e.errors.map(x => x.message).join(', ') }); return reply.code(500).send({ success: false, error: 'Error.' }); }
+      const entries = await fs.readdir(jobDir);
+      const out = entries.find(n => n.startsWith('output_'));
+      if (!out) throw new Error('no output');
+      return {
+        jobId, status: 'completed', progress: 100,
+        downloadUrl: `/download/${jobId}/${out}`,
+        error: null, createdAt: new Date().toISOString(),
+      };
+    } catch {
+      return {
+        jobId, status: 'failed', progress: 0,
+        downloadUrl: undefined, error: 'Not found or expired.',
+        createdAt: new Date().toISOString(),
+      };
+    }
   });
 
+  // ─── Download endpoint ───
   fastify.get('/download/:jobId/*', async (request, reply) => {
-    try {
-      const jobId = downloadParamsSchema.parse(request.params).jobId;
-      const filename = request.params['*'];
-      const candidate = path.join(TMP_DIR, jobId, filename || '');
-      try { await fs.stat(candidate); } catch { return reply.status(404).send({ success: false, error: 'Not found.' }); }
-      reply.type('application/octet-stream');
-      reply.header('Content-Disposition', `attachment; filename="${filename || jobId}"`);
-      return fs.createReadStream(candidate);
-    } catch (e) { if (e instanceof z.ZodError) return reply.code(400).send({ success: false, error: e.errors.map(x => x.message).join(', ') }); return reply.code(500).send({ success: false, error: 'Error.' }); }
+    const jobId = request.params.jobId;
+    const filename = request.params['*'];
+    const candidate = path.join(TMP_DIR, jobId, filename || '');
+    try { await fs.stat(candidate); } catch {
+      return reply.status(404).send({ success: false, error: 'File not found or expired.' });
+    }
+    reply.type('application/octet-stream');
+    reply.header('Content-Disposition', `attachment; filename="${filename || jobId}"`);
+    return fs.createReadStream(candidate);
   });
 }
