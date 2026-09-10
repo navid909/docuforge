@@ -154,20 +154,33 @@ export async function apiRoutes(fastify) {
 
       const firstFile = files[0];
 
-      // DEBUG: show what Zod receives
+      // HARDcoded test: bypass all logic and pass string directly to Zod
+      const hardcodedTest = toolSchema.safeParse({ tool: 'image-to-pdf-hardcoded', file: null, files: [], pages: null });
+      if (!hardcodedTest.success) {
+        return reply.code(500).send({ 
+          success: false, 
+          error: 'Zod itself is broken — hardcoded string failed: ' + hardcodedTest.error.issues.map(e => e.message).join(', '),
+          version: DEPLOYED_VERSION,
+        });
+      }
+
+      // DEBUG: show what Zod receives — explicit every field
       const zodInput = { tool, file: firstFile, files, pages: null };
+      
+      const zodFieldDebug = {
+        tool: { value: zodInput.tool, type: typeof zodInput.tool, isNull: zodInput.tool === null, isUndefined: zodInput.tool === undefined },
+        file: { present: !!zodInput.file, hasFilename: zodInput.file?.filename || null, hasData: !!zodInput.file?.data, dataLength: zodInput.file?.data?.length || 0 },
+        files: { count: zodInput.files.length, firstHasData: zodInput.files[0]?.data ? true : false },
+        pages: zodInput.pages,
+      };
+
       const parsed = toolSchema.safeParse(zodInput);
       if (!parsed.success) {
         return reply.code(422).send({ 
           success: false, 
           error: parsed.error.issues.map(e => e.message).join(', '), 
           version: DEPLOYED_VERSION,
-          zodInputDebug: {
-            tool: zodInput.tool,
-            toolType: typeof zodInput.tool,
-            filePresent: !!zodInput.file,
-            filesCount: zodInput.files.length,
-          },
+          zodFieldDebug,
           preZodDebug,
         });
       }
