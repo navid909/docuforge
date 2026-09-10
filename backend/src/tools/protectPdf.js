@@ -1,28 +1,27 @@
-import fs from 'fs/promises';
+import fsPromises from 'fs/promises';
 import path from 'path';
 import { PDFDocument } from 'pdf-lib';
 
 export async function protectPdf(inputPath, outputPath, password, mode, watermarkText, watermarkImage) {
-  const pdfBuffer = await fs.readFile(inputPath);
+  const pdfBuffer = await fsPromises.readFile(inputPath);
   const pdfDoc = await PDFDocument.load(pdfBuffer);
 
-  // Apply watermark if requested
   if (mode === 'watermark' || mode === 'both') {
     const watermark = watermarkText || 'Confidential';
+    const context = pdfDoc.context;
     const pages = pdfDoc.getPages();
     for (const page of pages) {
       const pageWidth = page.getWidth();
       const pageHeight = page.getHeight();
-      page.drawText(watermark, {
-        x: pageWidth / 2 - 50,
-        y: pageHeight / 2,
-        size: 24,
-        color: pdfDoc.context.operators.rgb(0.5, 0.5, 0.5),
-      });
+      context.save();
+      context.fillColor(0.5, 0.5, 0.5, 0.3);
+      context.beginPath();
+      context.font('Helvetica', 24);
+      context.fillText(watermark, pageWidth / 2 - 50, pageHeight / 2);
+      context.restore();
     }
   }
 
-  // Encrypt the PDF
   const pdfBytes = await pdfDoc.save({
     userPassword: password,
     ownerPassword: password + '_owner',
@@ -38,6 +37,6 @@ export async function protectPdf(inputPath, outputPath, password, mode, watermar
     },
   });
 
-  await fs.writeFile(outputPath, Buffer.from(pdfBytes));
+  await fsPromises.writeFile(outputPath, Buffer.from(pdfBytes));
   return outputPath;
 }

@@ -1,11 +1,11 @@
-import fs from 'fs/promises';
+import fsPromises from 'fs/promises';
+import fs from 'fs';
 import path from 'path';
-import { createWriteStream } from 'fs';
 import { PDFDocument } from 'pdf-lib';
 import archiver from 'archiver';
 
 export async function splitPdf(inputPath, outputPath, pageRange) {
-  const pdfBuffer = await fs.readFile(inputPath);
+  const pdfBuffer = await fsPromises.readFile(inputPath);
   const pdfDoc = await PDFDocument.load(pdfBuffer);
   const totalPages = pdfDoc.getPageCount();
 
@@ -14,7 +14,6 @@ export async function splitPdf(inputPath, outputPath, pageRange) {
     throw new Error('No valid page ranges provided');
   }
 
-  // For split, we create a zip containing multiple PDFs
   const outputDir = path.dirname(outputPath);
   const baseName = path.basename(inputPath, path.extname(inputPath));
 
@@ -33,17 +32,15 @@ export async function splitPdf(inputPath, outputPath, pageRange) {
     const pdfBytes = await newPdf.save();
 
     const partPath = path.join(outputDir, `${baseName}_part${i + 1}.pdf`);
-    await fs.writeFile(partPath, Buffer.from(pdfBytes));
+    await fsPromises.writeFile(partPath, Buffer.from(pdfBytes));
     zipFiles.push(partPath);
   }
 
-  // Create zip archive
   const zipPath = outputPath.replace(/\.pdf$/i, '.zip');
   await createZip(zipFiles, zipPath);
 
-  // Cleanup individual PDFs
   for (const f of zipFiles) {
-    try { await fs.unlink(f); } catch {}
+    try { await fsPromises.unlink(f); } catch {}
   }
 
   return zipPath;
@@ -57,7 +54,7 @@ function parsePageRanges(rangeStr, maxPages) {
   for (const part of parts) {
     if (part.includes('-')) {
       const [startStr, endStr] = part.split('-');
-      const start = parseInt(startStr, 10) - 1; // 0-indexed
+      const start = parseInt(startStr, 10) - 1;
       const end = parseInt(endStr, 10) - 1;
       if (!isNaN(start) && !isNaN(end) && start <= end && end < maxPages) {
         ranges.push([start, end]);
@@ -74,7 +71,7 @@ function parsePageRanges(rangeStr, maxPages) {
 
 async function createZip(files, outputPath) {
   return new Promise((resolve, reject) => {
-    const output = createWriteStream(outputPath);
+    const output = fs.createWriteStream(outputPath);
     const archive = archiver('zip', { zlib: { level: 9 } });
 
     output.on('close', () => resolve(outputPath));

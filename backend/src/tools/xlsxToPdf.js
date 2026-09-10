@@ -1,5 +1,5 @@
+import fsPromises from 'fs/promises';
 import path from 'path';
-import fs from 'fs/promises';
 import { createRequire } from 'module';
 const require = createRequire(import.meta.url);
 
@@ -21,7 +21,7 @@ export async function xlsxToPdf(inputPath, outputPath) {
     if (rowData.length > 0) data.push(rowData);
   });
 
-  const { PDFDocument, StandardFonts, rgb } = require('pdf-lib');
+  const { PDFDocument, StandardFonts } = require('pdf-lib');
   const pdfDoc = await PDFDocument.create();
   const page = pdfDoc.addPage([612, 792]);
   const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
@@ -43,7 +43,7 @@ export async function xlsxToPdf(inputPath, outputPath) {
   }
 
   const pdfBytes = await pdfDoc.save();
-  await fs.writeFile(outputPath, pdfBytes);
+  await fsPromises.writeFile(outputPath, pdfBytes);
 
   return outputPath;
 }
