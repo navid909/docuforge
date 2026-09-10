@@ -67,7 +67,7 @@ export default function ToolForm({ tool }: ToolFormProps) {
     if (pages) fd.append('pages', pages);
 
     const headers: Record<string, string> = {};
-    if (account?.apiKey) headers['Authorization'] = `Bearer ${account.apiKey}`;
+    if (account?.token) headers['Authorization'] = `Bearer ${account.token}`;
 
     try {
       const res = await fetch(`${BACKEND}/api/convert`, {
@@ -122,7 +122,7 @@ export default function ToolForm({ tool }: ToolFormProps) {
       while (!cancelled) {
         try {
           const headers: Record<string, string> = {};
-          if (account?.apiKey) headers['Authorization'] = `Bearer ${account.apiKey}`;
+          if (account?.token) headers['Authorization'] = `Bearer ${account.token}`;
           const res = await fetch(`${BACKEND}/api/status/${jobId}`, { headers });
           const data = (await res.json()) as JobResult;
           if (cancelled) return;
