@@ -1,6 +1,8 @@
 import fs from 'fs/promises';
 import path from 'path';
+import { createWriteStream } from 'fs';
 import sharp from 'sharp';
+import { PDFDocument } from 'pdf-lib';
 import archiver from 'archiver';
 
 export async function pdfToImage(inputPath, outputPath, format = 'png', pages = 'all') {
@@ -26,7 +28,7 @@ export async function pdfToImage(inputPath, outputPath, format = 'png', pages = 
 
 async function createZip(files, outputPath) {
   return new Promise((resolve, reject) => {
-    const output = require('fs').createWriteStream(outputPath);
+    const output = createWriteStream(outputPath);
     const archive = archiver('zip', { zlib: { level: 9 } });
 
     output.on('close', () => resolve(outputPath));

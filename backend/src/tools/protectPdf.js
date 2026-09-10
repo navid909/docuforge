@@ -1,7 +1,6 @@
 import fs from 'fs/promises';
 import path from 'path';
 import { PDFDocument } from 'pdf-lib';
-import sharp from 'sharp';
 
 export async function protectPdf(inputPath, outputPath, password, mode, watermarkText, watermarkImage) {
   const pdfBuffer = await fs.readFile(inputPath);
@@ -11,7 +10,8 @@ export async function protectPdf(inputPath, outputPath, password, mode, watermar
   if (mode === 'watermark' || mode === 'both') {
     const watermark = watermarkText || 'Confidential';
     const pages = pdfDoc.getPages();
-    for (const page of pages) {[0].getWidth();
+    for (const page of pages) {
+      const pageWidth = page.getWidth();
       const pageHeight = page.getHeight();
       page.drawText(watermark, {
         x: pageWidth / 2 - 50,

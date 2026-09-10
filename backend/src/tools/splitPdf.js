@@ -1,5 +1,6 @@
 import fs from 'fs/promises';
 import path from 'path';
+import { createWriteStream } from 'fs';
 import { PDFDocument } from 'pdf-lib';
 import archiver from 'archiver';
 
@@ -73,7 +74,7 @@ function parsePageRanges(rangeStr, maxPages) {
 
 async function createZip(files, outputPath) {
   return new Promise((resolve, reject) => {
-    const output = require('fs').createWriteStream(outputPath);
+    const output = createWriteStream(outputPath);
     const archive = archiver('zip', { zlib: { level: 9 } });
 
     output.on('close', () => resolve(outputPath));
