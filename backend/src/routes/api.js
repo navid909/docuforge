@@ -84,6 +84,17 @@ export async function apiRoutes(fastify) {
   // MAIN: read raw body as stream, parse manually
   fastify.post('/convert', async (request, reply) => {
     try {
+      // DEBUG: dump request state at handler entry
+      const entryDebug = {
+        url: request.url,
+        method: request.method,
+        query: request.query,
+        headers: {
+          'content-type': request.headers['content-type'],
+          'content-length': request.headers['content-length'],
+        },
+      };
+
       // READ RAW BODY (same pattern as /dump)
       const raw = await readAll(request.raw);
       const rawLen = raw.length;
@@ -91,24 +102,17 @@ export async function apiRoutes(fastify) {
       if (rawLen === 0) {
         return reply.code(422).send({
           success: false,
-          error: 'Empty request body — raw body stream returned 0 bytes.',
+          error: 'Empty request body.',
           version: DEPLOYED_VERSION,
-          debug: {
-            rawLen,
-            contentLength: request.headers['content-length'],
-            contentType: request.headers['content-type'],
-            query: request.query,
-            queryTool: request.query?.tool,
-          },
+          entryDebug,
         });
       }
 
       const ct = request.headers['content-type'] || '';
       const boundary = ct.match(/boundary=([^\s;]+)/)?.[1] || null;
 
-      // DEBUG: always return query info
       if (!boundary) {
-        return reply.code(400).send({ success: false, error: 'Not multipart: missing boundary.', version: DEPLOYED_VERSION, debug: { query: request.query, queryTool: request.query?.tool } });
+        return reply.code(400).send({ success: false, error: 'Not multipart: missing boundary.', version: DEPLOYED_VERSION, entryDebug });
       }
 
       const parts = parseRawMultipart(raw, boundary);
@@ -123,30 +127,49 @@ export async function apiRoutes(fastify) {
       // Fallback: query param
       if (!tool) tool = request.query?.tool || request.query?.tool_name || null;
 
+      // DEBUG: show what we have before Zod
+      const preZodDebug = {
+        tool,
+        toolType: typeof tool,
+        toolValue: tool,
+        fields: fields.map(f => ({ name: f.name, value: f.value })),
+        toolFromQuery: request.query?.tool || request.query?.tool_name,
+        fileCount: files.length,
+        rawLen,
+        rawFirst200: raw.toString('binary').substring(0, 200),
+      };
+
       if (!tool) {
         return reply.code(422).send({
           success: false,
           error: 'Missing tool field.',
           version: DEPLOYED_VERSION,
-          debug: {
-            fields: fields.map(f => ({ name: f.name, value: f.value })),
-            toolFromQuery: request.query?.tool || request.query?.tool_name,
-            fileCount: files.length,
-            rawLen,
-            rawFirst100: raw.toString('binary').substring(0, 100),
-          },
+          preZodDebug,
         });
       }
 
       if (files.length === 0) {
-        return reply.code(422).send({ success: false, error: 'Missing file in upload.', version: DEPLOYED_VERSION });
+        return reply.code(422).send({ success: false, error: 'Missing file in upload.', version: DEPLOYED_VERSION, preZodDebug });
       }
 
       const firstFile = files[0];
 
-      const parsed = toolSchema.safeParse({ tool, file: firstFile, files, pages: null });
+      // DEBUG: show what Zod receives
+      const zodInput = { tool, file: firstFile, files, pages: null };
+      const parsed = toolSchema.safeParse(zodInput);
       if (!parsed.success) {
-        return reply.code(422).send({ success: false, error: parsed.error.issues.map(e => e.message).join(', '), version: DEPLOYED_VERSION });
+        return reply.code(422).send({ 
+          success: false, 
+          error: parsed.error.issues.map(e => e.message).join(', '), 
+          version: DEPLOYED_VERSION,
+          zodInputDebug: {
+            tool: zodInput.tool,
+            toolType: typeof zodInput.tool,
+            filePresent: !!zodInput.file,
+            filesCount: zodInput.files.length,
+          },
+          preZodDebug,
+        });
       }
 
       const { tool: finalTool } = parsed.data;
