@@ -1,4 +1,4 @@
-import fs from 'fs/promises';
+import fs from 'fs-extra';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import crypto from 'crypto';
@@ -7,7 +7,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const BASE_DIR = path.resolve(__dirname, '..', '..');
 const TMP_DIR = path.join(BASE_DIR, 'tmp');
 
-const DEPLOYED_VERSION = 'MANUAL-VALIDATION-READBODY-v1';
+const DEPLOYED_VERSION = 'FINAL-VALIDATION-v1';
 
 // ─── Raw multipart parser ───
 function parseRawMultipart(rawBody, boundary) {
@@ -48,18 +48,15 @@ async function readPartToFile(part) {
   return Buffer.concat(chunks);
 }
 
-// ─── Manual validation (bypass Zod) ───
+// ─── Manual validation ───
 function validateConvertInput(tool, file, files, pages) {
   const errors = [];
-
   if (!tool || typeof tool !== 'string' || tool.trim().length === 0) {
     errors.push('tool must be a non-empty string');
   }
-
   if (!file && files.length === 0) {
     errors.push('At least one file is required');
   }
-
   return {
     valid: errors.length === 0,
     errors,
@@ -67,7 +64,7 @@ function validateConvertInput(tool, file, files, pages) {
   };
 }
 
-// ─── Tool dispatch map ───
+// ─── Tool dispatch ───
 const TOOL_MAP = {
   'pdf-to-word': 'pdfToWord',
   'image-to-pdf': 'imageToPdf',
@@ -87,7 +84,7 @@ const TOOL_MAP = {
 
 export async function apiRoutes(fastify) {
 
-  // Health / version marker
+  // Version marker
   fastify.get('/version', async () => ({ version: DEPLOYED_VERSION, deployedAt: new Date().toISOString() }));
 
   // Debug: dump raw body
@@ -107,16 +104,16 @@ export async function apiRoutes(fastify) {
     };
   });
 
-  // ─── MAIN CONVERT ENDPOINT ───
+  // ─── MAIN: /api/convert ───
   fastify.post('/convert', async (request, reply) => {
     try {
-      // 1. Read raw body
+      // 1. Read raw body via stream
       const raw = await readAll(request.raw);
       if (raw.length === 0) {
         return reply.code(400).send({ success: false, error: 'Empty request body.', version: DEPLOYED_VERSION });
       }
 
-      // 2. Parse multipart
+      // 2. Parse multipart manually
       const ct = request.headers['content-type'] || '';
       const boundary = ct.match(/boundary=([^\s;]+)/)?.[1] || null;
       if (!boundary) {
@@ -127,14 +124,14 @@ export async function apiRoutes(fastify) {
       const fields = parts.filter(p => p.type === 'field');
       const fileParts = parts.filter(p => p.type === 'file');
 
-      // 3. Extract tool (multipart field OR query param)
+      // 3. Extract tool (from multipart field or query param)
       let tool = null;
       for (const f of fields) {
         if (f.name === 'tool') { tool = f.value; break; }
       }
       if (!tool) tool = request.query?.tool || request.query?.tool_name || null;
 
-      // 4. Validate
+      // 4. Validate manually
       const validation = validateConvertInput(tool, fileParts[0] || null, fileParts, null);
       if (!validation.valid) {
         return reply.code(422).send({
@@ -153,7 +150,7 @@ export async function apiRoutes(fastify) {
 
       const { tool: finalTool, file: firstFile, files: allFiles } = validation.data;
 
-      // 5. Dispatch to tool function
+      // 5. Dispatch
       const toolFn = TOOL_MAP[finalTool];
       if (!toolFn) {
         return reply.code(400).send({ success: false, error: `Unsupported tool: ${finalTool}`, version: DEPLOYED_VERSION });
@@ -168,40 +165,30 @@ export async function apiRoutes(fastify) {
       }
 
       // 6. Process single file
-      try {
-        const jobId = crypto.randomUUID();
-        const jobDir = path.join(TMP_DIR, jobId);
-        await fs.ensureDir(jobDir);
+      const jobId = crypto.randomUUID();
+      const jobDir = path.join(TMP_DIR, jobId);
+      await fs.ensureDir(jobDir);
 
-        // Write uploaded file
-        const ext = path.extname(firstFile.filename || 'file') || '.bin';
-        const inputPath = path.join(jobDir, `input${ext}`);
-        await fs.writeFile(inputPath, firstFile.data);
+      const ext = path.extname(firstFile.filename || 'file') || '.bin';
+      const inputPath = path.join(jobDir, `input${ext}`);
+      await fs.writeFile(inputPath, firstFile.data);
 
-        // Process
-        const outputFile = path.join(jobDir, `output_${Date.now()}.bin`);
-        const tools = await import('../tools/index.js');
-        const result = await tools[toolFn](inputPath, outputFile);
+      const outputFile = path.join(jobDir, `output_${Date.now()}.bin`);
+      const tools = await import('../tools/index.js');
+      const result = await tools[toolFn](inputPath, outputFile);
 
-        const outputPath = Array.isArray(result) ? result[0] : result;
-        const finalName = path.basename(outputPath);
+      const outputPath = Array.isArray(result) ? result[0] : result;
+      const finalName = path.basename(outputPath);
 
-        return {
-          jobId,
-          status: 'completed',
-          tool: finalTool,
-          createdAt: new Date().toISOString(),
-          download: { filename: finalName, url: `/download/${jobId}/${finalName}` },
-        };
-      } catch (error) {
-        fastify.log.error({ error, tool: finalTool }, 'Tool processing failed');
-        throw error;
-      }
+      return {
+        jobId,
+        status: 'completed',
+        tool: finalTool,
+        createdAt: new Date().toISOString(),
+        download: { filename: finalName, url: `/download/${jobId}/${finalName}` },
+      };
     } catch (error) {
       fastify.log.error({ error, message: error.message, stack: error.stack }, 'Unhandled /convert error');
-      if (error?.code === 'ZOD_ERROR') {
-        return reply.code(422).send({ success: false, error: error.message, version: DEPLOYED_VERSION });
-      }
       return reply.code(500).send({ success: false, error: error.message || 'Processing failed.', version: DEPLOYED_VERSION });
     }
   });
@@ -237,7 +224,7 @@ export async function apiRoutes(fastify) {
     }
   }
 
-  // ─── Status endpoint ───
+  // ─── Status ───
   fastify.get('/status/:jobId', async (request, reply) => {
     const jobId = request.params.jobId;
     const jobDir = path.join(TMP_DIR, jobId);
@@ -245,21 +232,13 @@ export async function apiRoutes(fastify) {
       const entries = await fs.readdir(jobDir);
       const out = entries.find(n => n.startsWith('output_'));
       if (!out) throw new Error('no output');
-      return {
-        jobId, status: 'completed', progress: 100,
-        downloadUrl: `/download/${jobId}/${out}`,
-        error: null, createdAt: new Date().toISOString(),
-      };
+      return { jobId, status: 'completed', progress: 100, downloadUrl: `/download/${jobId}/${out}`, error: null, createdAt: new Date().toISOString() };
     } catch {
-      return {
-        jobId, status: 'failed', progress: 0,
-        downloadUrl: undefined, error: 'Not found or expired.',
-        createdAt: new Date().toISOString(),
-      };
+      return { jobId, status: 'failed', progress: 0, downloadUrl: undefined, error: 'Not found or expired.', createdAt: new Date().toISOString() };
     }
   });
 
-  // ─── Download endpoint ───
+  // ─── Download ───
   fastify.get('/download/:jobId/*', async (request, reply) => {
     const jobId = request.params.jobId;
     const filename = request.params['*'];
