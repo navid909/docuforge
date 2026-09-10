@@ -19,8 +19,9 @@ export async function docxToPdf(inputPath, outputPath) {
   let yPos = 720;
   const lineHeight = 15;
 
-  for (let i = 0; i < lines.length && yPos > 50; i++) {
-    const line = lines[i]?.trim();
+  for (let i = 0; i < lines.length; i++) {
+    if (yPos < 50) break;
+    const line = lines[i]?.trim() || '';
     if (line) {
       page.drawText(line.length > 100 ? line.slice(0, 100) : line, {
         x: 72,
@@ -28,12 +29,11 @@ export async function docxToPdf(inputPath, outputPath) {
         size: 11,
         font,
       });
-      yPos -= lineHeight;
-    } else {
-      yPos -= lineHeight;
     }
+    yPos -= lineHeight;
   }
 
-  await pdfDoc.save().then(pdfBytes => fsPromises.writeFile(outputPath, pdfBytes));
+  const pdfBytes = await pdfDoc.save();
+  await fsPromises.writeFile(outputPath, pdfBytes);
   return outputPath;
 }

@@ -1,5 +1,4 @@
 import fsPromises from 'fs/promises';
-import fs from 'fs';
 import path from 'path';
 import { PDFDocument } from 'pdf-lib';
 
@@ -13,8 +12,8 @@ export async function mergePdfs(inputFiles, outputPath) {
   for (const filePath of inputFiles) {
     const pdfBytes = await fsPromises.readFile(filePath);
     const pdf = await PDFDocument.load(pdfBytes);
-    const pages = await mergedPdf.copyPages(pdf, pdf.getPageIndices());
-    pages.forEach((page) => mergedPdf.addPage(page));
+    const copiedPages = mergedPdf.copyPages(pdf, pdf.getPageIndices());
+    copiedPages.forEach((page) => mergedPdf.addPage(page));
   }
 
   const pdfBytes = await mergedPdf.save();

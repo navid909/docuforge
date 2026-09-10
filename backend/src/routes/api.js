@@ -7,7 +7,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const BASE_DIR = path.resolve(__dirname, '..', '..');
 const TMP_DIR = path.join(BASE_DIR, 'tmp');
 
-const DEPLOYED_VERSION = 'FINAL-VALIDATION-v1';
+const DEPLOYED_VERSION = "v1-final-tools-fixed";
 
 // ─── Raw multipart parser ───
 function parseRawMultipart(rawBody, boundary) {
@@ -83,6 +83,8 @@ const TOOL_MAP = {
 };
 
 export async function apiRoutes(fastify) {
+  // Load tools module once at registration
+  const tools = await import('../tools/index.js');
 
   // Version marker
   fastify.get('/version', async () => ({ version: DEPLOYED_VERSION, deployedAt: new Date().toISOString() }));
@@ -167,18 +169,18 @@ export async function apiRoutes(fastify) {
       // 6. Process single file
       const jobId = crypto.randomUUID();
       const jobDir = path.join(TMP_DIR, jobId);
-      await fs.ensureDir(jobDir);
+      await fs.mkdir(jobDir, { recursive: true });
 
       const ext = path.extname(firstFile.filename || 'file') || '.bin';
       const inputPath = path.join(jobDir, `input${ext}`);
       await fs.writeFile(inputPath, firstFile.data);
 
       const outputFile = path.join(jobDir, `output_${Date.now()}.bin`);
-      const tools = await import('../tools/index.js');
-      const result = await tools[toolFn](inputPath, outputFile);
+      const toolMod = tools;
+      const result = await toolMod[toolFn](inputPath, outputFile);
 
-      const outputPath = Array.isArray(result) ? result[0] : result;
-      const finalName = path.basename(outputPath);
+      const outPath = Array.isArray(result) ? result[0] : result;
+      const finalName = path.basename(outPath);
 
       return {
         jobId,
@@ -197,7 +199,7 @@ export async function apiRoutes(fastify) {
     try {
       const jobId = crypto.randomUUID();
       const jobDir = path.join(TMP_DIR, jobId);
-      await fs.ensureDir(jobDir);
+      await fs.mkdir(jobDir, { recursive: true });
 
       const inputPaths = [];
       for (let i = 0; i < files.length; i++) {
@@ -208,8 +210,8 @@ export async function apiRoutes(fastify) {
       }
 
       const outputFile = path.join(jobDir, `output_${Date.now()}.pdf`);
-      const tools = await import('../tools/index.js');
-      const result = await fn(inputPaths, outputFile);
+      const toolMod = tools;
+      const result = await toolMod[toolFn](inputPaths, outputFile);
       const outPath = Array.isArray(result) ? result[0] : result;
       const finalName = path.basename(outPath);
 

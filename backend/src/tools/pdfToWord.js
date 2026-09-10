@@ -1,35 +1,43 @@
-import fs from 'fs/promises';
+import fsPromises from 'fs/promises';
 import path from 'path';
 import { PDFDocument } from 'pdf-lib';
-import { Document, Packer, Paragraph, TextRun } from 'docx';
 
 export async function pdfToWord(inputPath, outputPath) {
-  const dataBuffer = await fs.readFile(inputPath);
-
-  // Extract text from PDF using pdf-lib (already a dependency)
+  const dataBuffer = await fsPromises.readFile(inputPath);
   const pdfDoc = await PDFDocument.load(dataBuffer);
-  const textContent = await pdfDoc.extractText();
+  const pages = pdfDoc.getPages();
 
-  // Create a Word document with the extracted text
-  const doc = new Document({
-    sections: [
-      {
-        properties: {},
-        children: [
-          new Paragraph({
-            children: [
-              new TextRun({
-                text: textContent || '(No text extracted from PDF)',
-                size: 24,
-              }),
-            ],
-          }),
-        ],
-      },
-    ],
+  // Extract text from each page using page.getText()
+  const allText = [];
+  for (const page of pages) {
+    try {
+      const text = page.getText();
+      if (text) allText.push(text);
+    } catch {
+      allText.push('');
+    }
+  }
+  const textContent = allText.join('\\n');
+
+  const { Document: DocxDoc, Packer, Paragraph, TextRun } = require('docx');
+
+  const docxDoc = new DocxDoc({
+    sections: [{
+      properties: {},
+      children: [
+        new Paragraph({
+          children: [
+            new TextRun({
+              text: textContent || '(No text extracted)',
+              size: 24,
+            }),
+          ],
+        }),
+      ],
+    }],
   });
 
-  const buffer = await Packer.toBuffer(doc);
-  await fs.writeFile(outputPath, buffer);
+  const buffer = await Packer.toBuffer(docxDoc);
+  await fsPromises.writeFile(outputPath, buffer);
   return outputPath;
 }
