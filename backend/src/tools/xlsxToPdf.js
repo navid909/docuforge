@@ -21,7 +21,7 @@ export async function xlsxToPdf(inputPath, outputPath) {
     if (rowData.length > 0) data.push(rowData);
   });
 
-  const { PDFDocument, StandardFonts, rgb } = await import('pdf-lib');
+  const { PDFDocument, StandardFonts, rgb } = require('pdf-lib');
   const pdfDoc = await PDFDocument.create();
   const page = pdfDoc.addPage([612, 792]);
   const font = await pdfDoc.embedFont(StandardFonts.Helvetica);

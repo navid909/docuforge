@@ -1,13 +1,19 @@
 import fs from 'fs/promises';
 import path from 'path';
-import { Workbook } from 'exceljs';
+import { createRequire } from 'module';
+const require = createRequire(import.meta.url);
+
+const ExcelJS = require('exceljs');
 
 export async function pdfToExcel(inputPath, outputPath) {
   const pdfBuf = await fs.readFile(inputPath);
 
-  // For production, use pdf-parse or node-poppler for text extraction
-  // This is a placeholder implementation
-  const workbook = new Workbook();
+  // Use pdf-lib for text extraction (already a dependency)
+  const { PDFDocument } = require('pdf-lib');
+  const pdfDoc = await PDFDocument.load(pdfBuf);
+  const pageCount = pdfDoc.getPages().length;
+
+  const workbook = new ExcelJS.Workbook();
   const worksheet = workbook.addWorksheet('Extracted Data');
 
   worksheet.columns = [
@@ -15,14 +21,12 @@ export async function pdfToExcel(inputPath, outputPath) {
     { header: 'Content', key: 'content', width: 80 },
   ];
 
-  // Placeholder: write metadata about the PDF
-  const pdfDoc = await import('pdf-lib').then(m => m.PDFDocument.load(pdfBuf));
-  const pageCount = pdfDoc.getPages().length;
-
-  for (let i = 0; i < Math.min(pageCount, 10); i++) {
+  // Extract text from each page using pdf-lib
+  for (let i = 0; i < Math.min(pageCount, 50); i++) {
+    const pageText = await pdfDoc.getPages()[i].extractText();
     worksheet.addRow({
       page: i + 1,
-      content: `[Page ${i + 1} content would be extracted here using pdf-parse or poppler]`
+      content: pageText || `[Page ${i + 1} — no extractable text]`,
     });
   }
 
