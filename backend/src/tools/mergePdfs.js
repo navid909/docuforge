@@ -13,7 +13,10 @@ export async function mergePdfs(inputFiles, outputPath) {
     const pdfBytes = await fsPromises.readFile(filePath);
     const pdf = await PDFDocument.load(pdfBytes);
     const copiedPages = mergedPdf.copyPages(pdf, pdf.getPageIndices());
-    copiedPages.forEach((page) => mergedPdf.addPage(page));
+    // Use for-of instead of forEach — copyPages may return non-array in some pdf-lib versions
+    for (const page of copiedPages) {
+      mergedPdf.addPage(page);
+    }
   }
 
   const pdfBytes = await mergedPdf.save();

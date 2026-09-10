@@ -1,6 +1,10 @@
 import fsPromises from 'fs/promises';
 import path from 'path';
 import { PDFDocument } from 'pdf-lib';
+import { createRequire } from 'module';
+const require = createRequire(import.meta.url);
+
+const { Document: DocxDoc, Packer, Paragraph, TextRun } = require('docx');
 
 export async function pdfToWord(inputPath, outputPath) {
   const dataBuffer = await fsPromises.readFile(inputPath);
@@ -17,8 +21,6 @@ export async function pdfToWord(inputPath, outputPath) {
     }
   }
   const textContent = allText.join('\\n');
-
-  const { Document: DocxDoc, Packer, Paragraph, TextRun } = require('docx');
 
   const docxDoc = new DocxDoc({
     sections: [{
