@@ -1,12 +1,14 @@
 import fs from 'fs/promises';
-import path from 'path';
-import pdf from 'pdf-parse';
 import { Document, Packer, Paragraph, TextRun } from 'docx';
+import { PDFDocument } from 'pdf-lib';
 
 export async function pdfToWord(inputPath, outputPath) {
+  // Read and extract text from PDF using pdf-lib (already a dependency)
   const dataBuffer = await fs.readFile(inputPath);
-  const data = await pdf(dataBuffer);
+  const pdfDoc = await PDFDocument.load(dataBuffer);
+  const text = await pdfDoc.extractText();
 
+  // Build Word document from extracted text
   const doc = new Document({
     sections: [
       {
@@ -15,7 +17,7 @@ export async function pdfToWord(inputPath, outputPath) {
           new Paragraph({
             children: [
               new TextRun({
-                text: data.text || '',
+                text: text || '',
                 size: 24,
               }),
             ],
